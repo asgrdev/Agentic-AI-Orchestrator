@@ -1,0 +1,174 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+*.ipynb
+# Uncomment if you want to ignore output cells:
+# cell_names.json
+# .local/share/jupyter/
+
+# Data files (usually too large for git)
+*.csv
+*.xlsx
+*.xls
+*.json
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.joblib
+*.db
+*.sqlite
+*.sqlite3
+
+# Model files (large binaries)
+*.pth
+*.pt
+*.ckpt
+*.pb
+*.h5
+*.hdf5
+*.onnx
+*.tflite
+*.joblib
+*.pickle
+models/
+checkpoints/
+*.weights.h5
+*.model
+
+# Vector databases & embeddings
+chroma_db/
+faiss_index/
+vectordb/
+embeddings/
+*.lance
+*.milvus
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.crt
+secrets/
+config.local.*
+secrets.yaml
+credentials.json
+token.pickle
+
+# IDE & editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.spyproject/
+.ropeproject/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs & temp files
+*.log
+logs/
+temp/
+tmp/
+*.tmp
+*.temp
+debudebudebudebudebudebudebu& debudeblodebudebudeb #debudeburudebudebresudeb/ debude tune results
+
+# Deep Learning framew# Deep LeTor# Deep Learnilightni# Deep Learning frmp# Deep Learning frensorboard# Deep Learning framew# Deep LeTor# Deep Leag Fa# Deep Learnine/
+cache/
+# ONNX
+onnx_logs/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# DVC (Data Version# DVCro#)
+.dvc/
+.dvc/tmp/
+*.dvc
+
+# Large output directories
+outputs/
+results/
+figures/
+plots/
+reportsreportsreportsreportsreportsdatr/interim/
+reporexternal/
+
+# Testing
+.pytest_cache/
+.tox/
+.coverage
+coverage.xml
+*.cover
+htmlcov/
+.tox/
+noxfile.noxfile.noxfile.noxfile.noxributnoxfile.nkanoxfile.noxn
+build/
+devdevdevdevd
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/parts/p
+var/
+wheels/
+shashasython-wheels/
+*.egg-info/
+.installed.c.installeMANI.installed.c.inller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.cove.cove*
+.cache
+.cachests.xml
+coverage.xmlcoverage.xmly,cover
+.hypothesis/
+.p.p.p.p.p.p.p.p.p.p/
+
+# pye# p.python-v# pion
+
+# p# pnv
+PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP/
+.dmypy.json
+dmypy.json
+
+# pyre type checker
+.pyre/
+
+# Language servers
+.nil/
+
+# Profiling data
+*.prof
+*.lprof
