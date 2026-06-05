@@ -7,7 +7,7 @@
 Not another chatbot. Not a wrapper.  
 A true **orchestrator** where autonomous agents, LLMs, vector memory, knowledge graphs, sensors, and search engines fuse into one intelligent workflow.
 
-We are architecting a system that:
+I am architecting a system that:
 - Dynamically coordinates specialized agents
 - Blends semantic retrieval with graph reasoning
 - Ingests real‑world data via sensors & external sources
@@ -41,7 +41,7 @@ This is not a finished product – it’s a **movement**. Early contributors get
 
 ## Get Involved
 
-We welcome:
+I welcome:
 - **Coders** who want to implement agent logic, workflow engines, or integrations
 - **Thinkers** who challenge design decisions
 - **Tinkerers** who break things and suggest wild features
