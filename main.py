@@ -3,6 +3,8 @@ from pathlib import Path
 import sys
 from agents.orchestrator import Orchestrator
 from configs.main_config import CONFIG
+from core.model_manager import get_model_manager, ModelConfig
+from core.memory_monitor import get_memory_monitor
 
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
@@ -10,7 +12,6 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import fitz  # PyMuPDF برای PDF
-from llm.mlx_granite import MlxGraniteAnswerGenerator, MlxGraniteConfig
 
 # نکته: اگر از PyMuPDF برای PDF استفاده می‌کنید، مطمئن شوید نصب است.
 # برای فایل‌های ساده متنی نیازی به کتابخانه خاصی نیست.
@@ -92,34 +93,74 @@ async def chatbot(message, iface):
     else:
         full_prompt = user_command
 
-    # ۴. اجرای مدل
+    # ۴. اجرای مدل با مدیریت حافظه
     try:
-        # استراتژی مدیریت حافظه:
-        # اگر می‌خواهید سرعت بالا باشد و حافظه کافی دارید، مدل را خارج از تابع لود کنید.
-        # اگر حافظه کم است و نگران OOM هستید، مدل را اینجا لود و پس از پایان (به کمک gc) آزاد کنید.
-        # در اینجا برای اطمینان از رفع خطاهای حافظه، مدل را در هر بار اجرا لود می‌کنیم (یا کش می‌کنیم).
+        # بررسی وضعیت حافظه قبل از اجرا
+        memory_monitor = get_memory_monitor()
+        memory_status = memory_monitor.check_memory()
         
-        # نسخه کش شده (بهترین تعادل):
-        # if not hasattr(chatbot, 'extractor'):
-        #     print("Loading model (first time)...")
-        #     chatbot.extractor = MlxGraniteAnswerGenerator(
-        #         MlxGraniteConfig(model_path="/Users/dbk/Desktop/RAG/models/granite4-7b")
-        #     )
-        
-        # # اگر کش نداریم یا خراب شد (برای امنیت بیشتر)
-        # if not chatbot.extractor:
-        #      chatbot.extractor = MlxGraniteAnswerGenerator(
-        #         MlxGraniteConfig(model_path="/Users/dbk/Desktop/RAG/models/granite4-7b")
-        #     )
+        if not memory_status["ok"]:
+            # اگر حافظه پر است، پاکسازی انجام بده
+            memory_monitor.force_cleanup()
             
-        output = await startOrchestrator(user_command, iface) #chatbot.extractor.extract_answer(prompt=full_prompt)
+            # اگر هنوز مشکل داری، مدل‌های استفاده نشده را آزاد کن
+            model_manager = get_model_manager()
+            model_manager.auto_cleanup(threshold_mb=3072)  # 3GB threshold
+        
+        # اجرای orchestrator
+        output = await startOrchestrator(user_command, iface)
         return output
         
     except Exception as e:
-        # در صورت خطا، حافظه را پاک کنیم تا بعدی اجراها مشکلی نداشته باشند
-        import gc
-        gc.collect()
+        # در صورت خطا، حافظه را پاک کنیم
+        memory_monitor = get_memory_monitor()
+        memory_monitor.force_cleanup()
         return f"خطا در پردازش: {str(e)}"
+
+# راه‌اندازی Model Manager با تنظیمات مدل‌ها
+def initialize_models():
+    """ثبت تنظیمات مدل‌ها در Model Manager"""
+    model_manager = get_model_manager()
+    
+    # ثبت مدل Embedding
+    model_manager.register_model(
+        "embedding",
+        ModelConfig(
+            model_path="/Users/dbk/Desktop/agentic-graph-RAG/models/Qwen3-Embedding-0.6B",
+            model_type="embedding",
+            device="mps",  # برای Apple Silicon
+            use_fp16=True,
+            auto_unload=False,  # این مدل همیشه نیاز است
+            cache_size=500,
+        )
+    )
+    
+    # ثبت مدل LLM اصلی
+    model_manager.register_model(
+        "llm_main",
+        ModelConfig(
+            model_path="/Users/dbk/Desktop/RAG/models/phi3_mini",
+            model_type="reasoning",
+            device="mps",
+            use_fp16=True,
+            auto_unload=True,  # این مدل را می‌توان آزاد کرد
+        )
+    )
+    
+    # ثبت مدل Granite برای پاسخ‌دهی
+    model_manager.register_model(
+        "granite_answer",
+        ModelConfig(
+            model_path="/Users/dbk/Desktop/RAG/models/granite4_3b",
+            model_type="llm",
+            device="mps",
+            use_fp16=True,
+            auto_unload=True,
+        )
+    )
+
+# راه‌اندازی مدل‌ها
+initialize_models()
 
 GLOBAL_ORCH = Orchestrator(CONFIG)
 

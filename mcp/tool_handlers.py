@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # tool_handlers.py
 
 from external_sources.data_collector.manager  import DataCollectorManager

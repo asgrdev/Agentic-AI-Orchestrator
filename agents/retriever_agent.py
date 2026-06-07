@@ -10,6 +10,8 @@ from knowledg_graph.kuzudb_package.async_manager import AsyncKuzuManager
 from vector_store.weaviate_client import ConnectionMode, WeaviateStore
 from agents.state import AgentState, RetrievalContext
 from ingestion.embedding_generator import Qwen3EmbeddingClient
+from core.model_wrapper import get_embedding_model
+from core.memory_monitor import get_memory_monitor
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +24,23 @@ _KUZU_CONCURRENCY = 4
 class RetrieverAgent:
 
     def __init__(self, config: dict) -> None:
-        if "embed_client_factory" in config:
-            embed_client = config["embed_client_factory"]()
+        # استفاده از Model Wrapper برای مدیریت بهتر حافظه
+        self._use_model_manager = config.get("use_model_manager", True)
+        
+        if self._use_model_manager:
+            # استفاده از Model Manager
+            self._embed_wrapper = get_embedding_model()
+            self._embed_fn = None  # lazy load
         else:
-            embed_client = config["embed_client"]
-
-        self._embed_fn: Qwen3EmbeddingClient = embed_client #config.get("embed_fn")
+            # روش قدیمی
+            if "embed_client_factory" in config:
+                embed_client = config["embed_client_factory"]()
+            else:
+                embed_client = config["embed_client"]
+            self._embed_fn: Qwen3EmbeddingClient = embed_client
+            self._embed_wrapper = None
+        
+        self._memory_monitor = get_memory_monitor()
 
         self._kuzu = AsyncKuzuManager(config["kuzu_path"])
 
@@ -119,12 +132,26 @@ class RetrieverAgent:
     # ── Private Helpers ────────────────────────────────────────────────
 
     async def _embed(self, text: str) -> list[float]:
-        if not self._embed_fn:
+        """Generate embedding with memory management"""
+        if self._use_model_manager and self._embed_wrapper:
+            # استفاده از Model Manager
+            def _embed_sync():
+                with self._embed_wrapper.use_model() as model:
+                    result = model.embed_single(text)
+                    return result["embedding"]
+            
+            return await asyncio.get_running_loop().run_in_executor(
+                None, _embed_sync
+            )
+        elif self._embed_fn:
+            # روش قدیمی
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, self._embed_fn.embed_single, text
+            )
+            return result["embedding"]
+        else:
             logger.warning("No embed_fn — zero vector used")
             return [0.0] * 1536
-        return await asyncio.get_running_loop().run_in_executor(
-            None, self._embed_fn.embed_single, text
-        )
 
     async def _build_entity_weights(self, state: AgentState) -> dict[str, float]:
         """

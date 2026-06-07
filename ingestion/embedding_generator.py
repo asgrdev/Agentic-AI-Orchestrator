@@ -115,7 +115,7 @@ class Qwen3EmbeddingClient:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self.close()
+        self.free_memory()
     # ──────────────────────────────────────────
     # راه‌اندازی
     # ──────────────────────────────────────────
@@ -503,11 +503,29 @@ class Qwen3EmbeddingClient:
 
     def free_memory(self) -> None:
         """آزاد کردن حافظه GPU"""
-        del self.model
-        if self.device == "cuda":
-            torch.cuda.empty_cache()
-        gc.collect()
-        logger.info("🧹 حافظه آزاد شد")
+        try:
+            # پاک کردن کش
+            self.clear_cache()
+            
+            # حذف مدل و tokenizer
+            if hasattr(self, 'model'):
+                del self.model
+            if hasattr(self, 'tokenizer'):
+                del self.tokenizer
+            
+            # پاکسازی حافظه GPU
+            if self.device == "cuda":
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            elif self.device == "mps":
+                torch.mps.empty_cache()
+            
+            # Python garbage collection
+            gc.collect()
+            
+            logger.info("🧹 حافظه آزاد شد")
+        except Exception as e:
+            logger.error(f"خطا در آزادسازی حافظه: {e}")
 
     def __repr__(self) -> str:
         info = self.model_info()
