@@ -64,3 +64,14 @@ class AgentState:
     errors:              list[str] = field(default_factory=list)
     timings:             dict[str, float] = field(default_factory=dict)
     created_at:          datetime = field(default_factory=datetime.utcnow)
+    
+    # Adaptive Orchestrator (جدید)
+    query_analysis:      Any = None  # QueryAnalysis
+    
+    # Tool/Skill Execution (جدید)
+    tool_results:        list[dict] = field(default_factory=list)  # نتایج اجرای tool calls
+    step_results:        dict[int, dict] = field(default_factory=dict)  # نتایج اجرای plan steps
+    
+    # Validation (جدید)
+    validation:          Any = None  # ValidationResult
+    dynamic_plan:        Any = None  # DynamicPlan

@@ -270,7 +270,10 @@ class MLXBackend(LLMBackend):
             raise ImportError(
                 "mlx-lm not installed: pip install mlx-lm transformers"
             ) from e
+        import os
 
+        # Set the environment variable before importing MLX
+        os.environ["MLX_GPU"] = "0"
         self._generate = generate
         self.model, self.tokenizer = load(model_path)
         logger.info(f"MLX model loaded: {model_path}")

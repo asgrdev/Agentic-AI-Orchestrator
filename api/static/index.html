@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Graph RAG - Advanced Visualization</title>
+    
+    <!-- Styles -->
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            direction: rtl;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 15px;
+            padding: 20px 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #667eea;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .tab {
+            background: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+        }
+        
+        .tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            min-height: 600px;
+        }
+        
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Sensor Monitor Styles */
+        .sensor-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .sensor-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            transition: transform 0.3s;
+        }
+        
+        .sensor-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .sensor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .sensor-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #333;
+        }
+        
+        .sensor-status {
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-active { background: #4ade80; color: white; }
+        .status-idle { background: #94a3b8; color: white; }
+        .status-processing { background: #fbbf24; color: white; }
+        .status-error { background: #ef4444; color: white; }
+        
+        .sensor-info {
+            margin-top: 15px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        .info-label {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .info-value {
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        /* Graph Visualization Styles */
+        .graph-container {
+            display: flex;
+            gap: 20px;
+            height: 600px;
+        }
+        
+        .graph-sidebar {
+            width: 300px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .graph-canvas {
+            flex: 1;
+            background: #fff;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            position: relative;
+        }
+        
+        .graph-stats {
+            margin-bottom: 20px;
+        }
+        
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 13px;
+        }
+        
+        .stat-value {
+            color: #667eea;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        
+        .graph-controls {
+            margin-top: 20px;
+        }
+        
+        .control-btn {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: background 0.3s;
+        }
+        
+        .control-btn:hover {
+            background: #5568d3;
+        }
+        
+        /* Agent Flow Styles */
+        .flow-container {
+            display: flex;
+            gap: 20px;
+            height: 600px;
+        }
+        
+        .flow-sidebar {
+            width: 300px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .flow-canvas {
+            flex: 1;
+            background: #fff;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .flow-node {
+            position: absolute;
+            background: white;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            padding: 15px 20px;
+            min-width: 150px;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transition: all 0.3s;
+        }
+        
+        .flow-node:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        }
+        
+        .flow-node.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .flow-node.completed {
+            background: #4ade80;
+            color: white;
+            border-color: #22c55e;
+        }
+        
+        .flow-node.error {
+            background: #ef4444;
+            color: white;
+            border-color: #dc2626;
+        }
+        
+        .node-label {
+            font-weight: 700;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .node-type {
+            font-size: 11px;
+            opacity: 0.8;
+        }
+        
+        .flow-info {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+        }
+        
+        .flow-query {
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .flow-metrics {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .metric-box {
+            text-align: center;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .metric-label {
+            font-size: 11px;
+            color: #666;
+        }
+        
+        .metric-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #667eea;
+        }
+        
+        /* Loading Spinner */
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-left: 8px;
+        }
+        
+        .status-indicator.online {
+            background: #4ade80;
+            box-shadow: 0 0 10px #4ade80;
+        }
+        
+        .status-indicator.offline {
+            background: #ef4444;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🤖 Agentic Graph RAG - پنل مدیریت پیشرفته</h1>
+            <p>نظارت بر سنسورها، گراف دانش و فلوی Agent <span class="status-indicator online"></span></p>
+        </div>
+        
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('sensors')">
+                📡 نظارت بر سنسورها
+            </button>
+            <button class="tab" onclick="switchTab('graph')">
+                🕸️ گراف دانش
+            </button>
+            <button class="tab" onclick="switchTab('flow')">
+                🔄 فلوی Agent
+            </button>
+        </div>
+        
+        <!-- Tab Contents -->
+        
+        <!-- Sensor Monitor Tab -->
+        <div id="sensors-tab" class="tab-content active">
+            <h2 style="margin-bottom: 20px; color: #333;">📡 نظارت بر سنسورها و مدل‌ها</h2>
+            <div class="sensor-grid" id="sensor-grid">
+                <!-- Sensors will be loaded here -->
+                <div class="spinner"></div>
+            </div>
+        </div>
+        
+        <!-- Knowledge Graph Tab -->
+        <div id="graph-tab" class="tab-content">
+            <h2 style="margin-bottom: 20px; color: #333;">🕸️ گراف دانش و روابط معنایی</h2>
+            <div class="graph-container">
+                <div class="graph-sidebar">
+                    <div class="graph-stats" id="graph-stats">
+                        <h3 style="margin-bottom: 15px; color: #333;">آمار گراف</h3>
+                        <div class="spinner"></div>
+                    </div>
+                    <div class="graph-controls">
+                        <button class="control-btn" onclick="refreshGraph()">🔄 بروزرسانی</button>
+                        <button class="control-btn" onclick="zoomIn()">🔍 بزرگنمایی</button>
+                        <button class="control-btn" onclick="zoomOut()">🔎 کوچک‌نمایی</button>
+                        <button class="control-btn" onclick="resetView()">↺ بازنشانی نما</button>
+                    </div>
+                </div>
+                <div class="graph-canvas" id="graph-canvas">
+                    <canvas id="graph-viz" style="width: 100%; height: 100%;"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Agent Flow Tab -->
+        <div id="flow-tab" class="tab-content">
+            <h2 style="margin-bottom: 20px; color: #333;">🔄 فلوی Agent (LangGraph Style)</h2>
+            <div class="flow-container">
+                <div class="flow-sidebar">
+                    <div class="flow-info" id="flow-info">
+                        <h3 style="margin-bottom: 10px; color: #333;">اطلاعات فلو</h3>
+                        <div class="spinner"></div>
+                    </div>
+                    <div class="graph-controls">
+                        <button class="control-btn" onclick="startNewFlow()">▶️ شروع فلوی جدید</button>
+                        <button class="control-btn" onclick="pauseFlow()">⏸️ توقف</button>
+                        <button class="control-btn" onclick="resumeFlow()">▶️ ادامه</button>
+                        <button class="control-btn" onclick="resetFlow()">↺ بازنشانی</button>
+                    </div>
+                </div>
+                <div class="flow-canvas" id="flow-canvas">
+                    <!-- Flow nodes will be rendered here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- JavaScript -->
+    <script>
+        // Configuration
+        const API_BASE = 'http://localhost:8000/api';
+        const WS_URL = 'ws://localhost:8000/ws';
+        
+        let ws = null;
+        let currentTab = 'sensors';
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initWebSocket();
+            loadSensors();
+            loadGraphStats();
+            loadFlow();
+            
+            // Auto-refresh every 5 seconds
+            setInterval(() => {
+                if (currentTab === 'sensors') loadSensors();
+                if (currentTab === 'graph') loadGraphStats();
+                if (currentTab === 'flow') loadFlow();
+            }, 5000);
+        });
+        
+        // WebSocket
+        function initWebSocket() {
+            ws = new WebSocket(WS_URL);
+            
+            ws.onopen = () => {
+                console.log('✅ WebSocket connected');
+                document.querySelector('.status-indicator').classList.add('online');
+                document.querySelector('.status-indicator').classList.remove('offline');
+                
+                // Heartbeat
+                setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send('ping');
+                    }
+                }, 30000);
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'sensor_update') {
+                    updateSensorCard(data.sensor, data.data);
+                } else if (data.type === 'flow_update') {
+                    updateFlowVisualization(data.data);
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('❌ WebSocket disconnected');
+                document.querySelector('.status-indicator').classList.remove('online');
+                document.querySelector('.status-indicator').classList.add('offline');
+                
+                // Reconnect after 5 seconds
+                setTimeout(initWebSocket, 5000);
+            };
+        }
+        
+        // Tab Switching
+        function switchTab(tabName) {
+            currentTab = tabName;
+            
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            // Update tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            
+            // Load data for the new tab
+            if (tabName === 'sensors') loadSensors();
+            if (tabName === 'graph') loadGraphStats();
+            if (tabName === 'flow') loadFlow();
+        }
+        
+        // Sensor Functions
+        async function loadSensors() {
+            try {
+                const response = await fetch(`${API_BASE}/sensors/status`);
+                const sensors = await response.json();
+                
+                const grid = document.getElementById('sensor-grid');
+                grid.innerHTML = sensors.map(sensor => createSensorCard(sensor)).join('');
+            } catch (error) {
+                console.error('Failed to load sensors:', error);
+            }
+        }
+        
+        function createSensorCard(sensor) {
+            const statusClass = `status-${sensor.status}`;
+            const statusText = {
+                'active': 'فعال',
+                'idle': 'آماده',
+                'processing': 'در حال پردازش',
+                'error': 'خطا'
+            }[sensor.status] || sensor.status;
+            
+            const icon = {
+                'vision': '👁️',
+                'audio': '🎤',
+                'text': '📝'
+            }[sensor.sensor_type] || '📡';
+            
+            return `
+                <div class="sensor-card">
+                    <div class="sensor-header">
+                        <div class="sensor-title">${icon} ${sensor.sensor_type.toUpperCase()}</div>
+                        <div class="sensor-status ${statusClass}">${statusText}</div>
+                    </div>
+                    <div class="sensor-info">
+                        <div class="info-row">
+                            <span class="info-label">مدل:</span>
+                            <span class="info-value">${sensor.model_name || 'N/A'}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">اطمینان:</span>
+                            <span class="info-value">${(sensor.confidence * 100).toFixed(1)}%</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">زمان پردازش:</span>
+                            <span class="info-value">${sensor.processing_time.toFixed(2)}s</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">آخرین ورودی:</span>
+                            <span class="info-value">${sensor.last_input ? sensor.last_input.substring(0, 20) + '...' : 'N/A'}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function updateSensorCard(sensorType, data) {
+            // Real-time update via WebSocket
+            loadSensors();
+        }
+        
+        // Graph Functions
+        async function loadGraphStats() {
+            try {
+                const response = await fetch(`${API_BASE}/graph/stats`);
+                const stats = await response.json();
+                
+                const statsDiv = document.getElementById('graph-stats');
+                statsDiv.innerHTML = `
+                    <h3 style="margin-bottom: 15px; color: #333;">آمار گراف</h3>
+                    <div class="stat-item">
+                        <span class="stat-label">تعداد Entities</span>
+                        <span class="stat-value">${stats.entity_count}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">تعداد Relations</span>
+                        <span class="stat-value">${stats.relation_count}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">روابط صریح</span>
+                        <span class="stat-value">${stats.explicit_relations}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">روابط استنتاجی</span>
+                        <span class="stat-value">${stats.inferred_relations}</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">کیفیت گراف</span>
+                        <span class="stat-value">${(stats.quality_score * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">تراکم</span>
+                        <span class="stat-value">${stats.density.toFixed(2)}</span>
+                    </div>
+                `;
+                
+                // Draw graph visualization
+                drawGraph();
+            } catch (error) {
+                console.error('Failed to load graph stats:', error);
+            }
+        }
+        
+        function drawGraph() {
+            const canvas = document.getElementById('graph-viz');
+            const ctx = canvas.getContext('2d');
+            
+            // Set canvas size
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw sample graph (در واقعیت باید از API بخواند)
+            ctx.fillStyle = '#667eea';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            
+            // Sample nodes
+            const nodes = [
+                { x: 200, y: 150, label: 'Python' },
+                { x: 400, y: 150, label: 'Programming' },
+                { x: 600, y: 150, label: 'Language' },
+                { x: 300, y: 300, label: 'Ruby' },
+                { x: 500, y: 300, label: 'JavaScript' },
+            ];
+            
+            // Draw edges
+            ctx.strokeStyle = '#cbd5e1';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(200, 150);
+            ctx.lineTo(400, 150);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(400, 150);
+            ctx.lineTo(600, 150);
+            ctx.stroke();
+            
+            // Draw nodes
+            nodes.forEach(node => {
+                ctx.fillStyle = '#667eea';
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 30, 0, 2 * Math.PI);
+                ctx.fill();
+                
+                ctx.fillStyle = 'white';
+                ctx.fillText(node.label, node.x, node.y + 5);
+            });
+        }
+        
+        function refreshGraph() {
+            loadGraphStats();
+        }
+        
+        function zoomIn() {
+            console.log('Zoom in');
+        }
+        
+        function zoomOut() {
+            console.log('Zoom out');
+        }
+        
+        function resetView() {
+            drawGraph();
+        }
+        
+        // Flow Functions
+        async function loadFlow() {
+            try {
+                const response = await fetch(`${API_BASE}/flow/current`);
+                const flow = await response.json();
+                
+                updateFlowInfo(flow);
+                updateFlowVisualization(flow);
+            } catch (error) {
+                console.error('Failed to load flow:', error);
+                document.getElementById('flow-info').innerHTML = `
+                    <h3 style="margin-bottom: 10px; color: #333;">اطلاعات فلو</h3>
+                    <p style="color: #666;">هیچ فلوی فعالی وجود ندارد</p>
+                `;
+            }
+        }
+        
+        function updateFlowInfo(flow) {
+            const infoDiv = document.getElementById('flow-info');
+            infoDiv.innerHTML = `
+                <h3 style="margin-bottom: 10px; color: #333;">اطلاعات فلو</h3>
+                <div class="flow-query">
+                    <strong>Query:</strong> ${flow.query}
+                </div>
+                <div class="flow-metrics">
+                    <div class="metric-box">
+                        <div class="metric-label">تعداد مراحل</div>
+                        <div class="metric-value">${flow.step_count}</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-label">مدت زمان</div>
+                        <div class="metric-value">${flow.duration.toFixed(1)}s</div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function updateFlowVisualization(flow) {
+            const canvas = document.getElementById('flow-canvas');
+            canvas.innerHTML = '';
+            
+            // Layout nodes
+            const nodeSpacing = 200;
+            const startX = 100;
+            const startY = 100;
+            
+            flow.nodes.forEach((node, index) => {
+                const nodeDiv = document.createElement('div');
+                nodeDiv.className = `flow-node ${node.status}`;
+                nodeDiv.style.left = `${startX + (index % 3) * nodeSpacing}px`;
+                nodeDiv.style.top = `${startY + Math.floor(index / 3) * 150}px`;
+                
+                nodeDiv.innerHTML = `
+                    <div class="node-label">${node.label}</div>
+                    <div class="node-type">${node.type}</div>
+                `;
+                
+                canvas.appendChild(nodeDiv);
+            });
+        }
+        
+        async function startNewFlow() {
+            const query = prompt('لطفاً query خود را وارد کنید:');
+            if (!query) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/flow/start`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                
+                const result = await response.json();
+                console.log('Flow started:', result);
+                
+                setTimeout(loadFlow, 500);
+            } catch (error) {
+                console.error('Failed to start flow:', error);
+            }
+        }
+        
+        function pauseFlow() {
+            console.log('Pause flow');
+        }
+        
+        function resumeFlow() {
+            console.log('Resume flow');
+        }
+        
+        function resetFlow() {
+            document.getElementById('flow-canvas').innerHTML = '';
+            document.getElementById('flow-info').innerHTML = `
+                <h3 style="margin-bottom: 10px; color: #333;">اطلاعات فلو</h3>
+                <p style="color: #666;">هیچ فلوی فعالی وجود ندارد</p>
+            `;
+        }
+    </script>
+</body>
+</html>

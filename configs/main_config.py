@@ -15,7 +15,7 @@ def _make_config() -> dict:
 
     def make_embed_client():
         from ingestion.embedding_generator import Qwen3EmbeddingClient
-        return Qwen3EmbeddingClient()
+        return Qwen3EmbeddingClient(model_path="/Users/dbk/Desktop/agentic-graph-RAG/models/Qwen3-Embedding-0.6B")
 
     def make_context_builder():
         from ingestion.context_builder import ContextBuilder
@@ -89,11 +89,11 @@ def _make_config() -> dict:
         "chunk_overlap":        64,
 
         # ── NERExtractor ─────────────────────────────────────────────
-        "spacy_model":          "en_core_web_trf",
+        "spacy_model":          "en_core_web_trf" ,# "en-core-web-lg",
         "gliner_model":         "urchade/gliner_medium-v2.1",
 
         # ── LLMRelationExtractor ─────────────────────────────────────
-        "relation_model":       None,   # اگر مدل جداگانه داری اینجا بذار
+        "relation_model":       "/Users/dbk/Desktop/agentic-graph-RAG/models/Qwen3-Embedding-0.6B",#None,   # اگر مدل جداگانه داری اینجا بذار
 
         # ── EntityExtractionPipeline ─────────────────────────────────
         "max_workers":          4,

@@ -70,6 +70,8 @@ class RetrieverAgent:
     # ── Lifecycle ──────────────────────────────────────────────────────
 
     async def startup(self) -> None:
+        if self._ready:
+            return
         await self._kuzu.__aenter__()
         await self._weaviate.connect()
         self._ready = True

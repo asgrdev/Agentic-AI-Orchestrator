@@ -265,7 +265,7 @@ class LlamaCppBackend(LLMBackend):
         # in-process — synchronous call را در thread pool اجرا می‌کنیم
         import asyncio
         prompt = f"<|system|>\n{system}\n<|user|>\n{user}\n<|assistant|>\n"
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: self._llm(prompt, max_tokens=max_tokens, temperature=temperature),
@@ -288,6 +288,9 @@ class MLXBackend(LLMBackend):
     generation همزمان (sync) است → در executor اجرا می‌شود.
     """
 
+    # model weights are large — load once and share across all instances
+    _model_cache: dict[str, tuple] = {}
+
     def __init__(
         self,
         model_path: str,
@@ -306,8 +309,14 @@ class MLXBackend(LLMBackend):
             ) from e
 
         self._generate = generate
-        self.model, self.tokenizer = load(model_path)
-        logger.info(f"MLX model loaded: {model_path}")
+        if model_path not in MLXBackend._model_cache:
+            model, tokenizer = load(model_path)
+            MLXBackend._model_cache[model_path] = (model, tokenizer)
+            logger.info(f"MLX model loaded: {model_path}")
+        else:
+            logger.debug(f"MLX model reused from cache: {model_path}")
+        self.model, self.tokenizer = MLXBackend._model_cache[model_path]
+        self._model_path = model_path
 
         # sampler یک‌بار ساخته می‌شود — overhead تکراری ندارد
         self._sampler = make_sampler(
@@ -333,9 +342,6 @@ class MLXBackend(LLMBackend):
     async def close(self) -> None:
         try:
             import mlx.core as mx
-            self.model = None
-            self.tokenizer = None
-            gc.collect()
             mx.metal.clear_cache()
         except Exception:
             pass
@@ -386,7 +392,7 @@ class MLXBackend(LLMBackend):
         else:
             gen_kwargs = self._gen_kwargs
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             None,
             lambda: self._generate(
@@ -398,9 +404,6 @@ class MLXBackend(LLMBackend):
             ),
         )
         return result
-
-    async def close(self) -> None:
-        pass  # MLX مدیریت حافظه خودکار دارد
 
 
 # ─────────────────────────────────────────────
@@ -455,30 +458,32 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.exception("JSON Exeption1: %s","--------------------"  )
+        logger.exception("JSON Exeption1: %s", "--------------------")
         pass
 
     # پیدا کردن اولین { ... } معتبر
-    match = re.search(r"\{.*\}", text, re.DOTALL).group()
-    
-    start = match.find("{")
-    end = match.find("<|end|>")
-    print(text)
-    if start != -1 and end != -1:
-        first_json = text[start:end].strip()
-        match = first_json
-        print(first_json)
-    else:
-        print("نتوانستم محدوده JSON را پیدا کنم.")
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m is None:
+        raise ValueError(f"No valid JSON found in model output:\n-----\n{text}")
 
-    if match:
+    matched = m.group()
+
+    # مدل‌های phi ممکن است چندین JSON با <|end|> بین آن‌ها تولید کنند؛ اولی را نگه می‌داریم
+    end_token_pos = matched.find("<|end|>")
+    if end_token_pos != -1:
+        matched = matched[:end_token_pos].strip()
+        last_brace = matched.rfind("}")
+        if last_brace != -1:
+            matched = matched[:last_brace + 1]
+
+    if matched:
         try:
-            return json.loads(match.group())
+            return json.loads(matched)
         except json.JSONDecodeError:
-            logger.exception("JSON Exeption2: %s", "--------------------" )
+            logger.exception("JSON Exeption2: %s", "--------------------")
             pass
 
-    raise ValueError(f"No valid JSON found in model output:{match.group()}\n-----\n{text}")
+    raise ValueError(f"No valid JSON found in model output:\n-----\n{text}")
 
 
 def _validate_understand(data: dict, query: str) -> dict:
@@ -605,28 +610,115 @@ class Phi4MiniClient:
          
 
     # ── Public API ────────────────────────────
-    async def understand_and_plan(self, query: str, history: list[dict]) -> dict:
-        """یک call به جای دو تا"""
-        prompt = UNDERSTAND_PLAN_TEMPLATE.format(
-            query=query,
-            history=json.dumps(history[-3:], ensure_ascii=False),
-            tools=self._tools_desc,
-        )
-        raw = await self._backend.chat(
-            system=UNDERSTAND_PLAN_SYSTEM,
-            user=prompt,
-            max_tokens=512,  # کمتر از 1024 — برای structured output کافیه
-        )
-        try:
-            data = _extract_json(raw)
-            data = _validate_understand(data, query)
-            return self._validate_plan(data, data)
-        except Exception as e:
-            logger.warning(f"understand_and_plan() failed: {e}")
-            fb = self._fallback_understand(query)
-            return {**fb, **self._fallback_plan(fb)}
-        finally:
-            await self._backend.close()
+    async def understand_and_plan(
+        self,
+        query: str,
+        history: list[dict],
+        max_retries: int = 2,
+        timeout: float = 300.0
+    ) -> dict:
+        """
+        Combined understanding and planning with enhanced reliability.
+        
+        Features:
+        - Retry mechanism for transient failures
+        - Timeout protection
+        - Enhanced validation
+        - Detailed logging
+        - Quality scoring
+        
+        Args:
+            query: User query
+            history: Conversation history
+            max_retries: Maximum retry attempts (default: 2)
+            timeout: Timeout in seconds (default: 30.0)
+            
+        Returns:
+            Combined understanding and plan dict with quality score
+        """
+        import asyncio
+        from time import time
+        
+        start_time = time()
+        last_error = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                logger.info(f"understand_and_plan attempt {attempt + 1}/{max_retries + 1} for query: {query[:50]}...")
+                
+                # Prepare prompt
+                prompt = UNDERSTAND_PLAN_TEMPLATE.format(
+                    query=query,
+                    history=json.dumps(history[-3:], ensure_ascii=False),
+                    tools=self._tools_desc,
+                )
+                
+                # Call LLM with timeout
+                raw = await asyncio.wait_for(
+                    self._backend.chat(
+                        system=UNDERSTAND_PLAN_SYSTEM,
+                        user=prompt,
+                        max_tokens=512,
+                    ),
+                    timeout=timeout
+                )
+                
+                # Extract and validate
+                data = _extract_json(raw)
+                data = _validate_understand(data, query)
+                data = self._validate_plan(data, data)
+                
+                # Add quality score
+                quality_score = self._calculate_quality_score(data, query)
+                data['quality_score'] = quality_score
+                data['processing_time'] = time() - start_time
+                data['attempt'] = attempt + 1
+                
+                # Log success
+                logger.info(
+                    f"understand_and_plan succeeded: "
+                    f"quality={quality_score:.2f}, "
+                    f"time={data['processing_time']:.2f}s, "
+                    f"attempt={attempt + 1}"
+                )
+                
+                # If quality is too low and we have retries left, try again
+                if quality_score < 0.5 and attempt < max_retries:
+                    logger.warning(f"Low quality score ({quality_score:.2f}), retrying...")
+                    continue
+                
+                return data
+                
+            except asyncio.TimeoutError:
+                last_error = f"Timeout after {timeout}s"
+                logger.warning(f"understand_and_plan timeout on attempt {attempt + 1}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))  # Exponential backoff
+                    
+            except json.JSONDecodeError as e:
+                last_error = f"JSON parse error: {str(e)}"
+                logger.warning(f"understand_and_plan JSON error on attempt {attempt + 1}: {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"understand_and_plan error on attempt {attempt + 1}: {e}", exc_info=True)
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        
+        # All retries failed - use fallback
+        logger.error(f"understand_and_plan failed after {max_retries + 1} attempts: {last_error}")
+        fb = self._fallback_understand(query)
+        fb_plan = self._fallback_plan(fb)
+        result = {**fb, **fb_plan}
+        result['quality_score'] = 0.3  # Low score for fallback
+        result['processing_time'] = time() - start_time
+        result['attempt'] = max_retries + 1
+        result['fallback'] = True
+        result['error'] = last_error
+        
+        return result
  
  
     async def understand(self, query: str, history: list[dict]) -> dict:
@@ -638,27 +730,61 @@ class Phi4MiniClient:
         sub_questions, tool_calls (validated), search_keywords, requires_realtime
         """
         
-        print(f"phi3 query : undestanding :  start->>   {query}   <<-end")
-        print(f"phi3 history : undestanding :  start->>   {history}   <<-end")
-        print(f"phi3 tools : undestanding :  start->>   {self._tools_desc}   <<-end")
-
         prompt = UNDERSTAND_TEMPLATE.format(
             query=query,
-            history=json.dumps(history[-3:],
-            ensure_ascii=False),
+            history=json.dumps(history[-3:], ensure_ascii=False),
             tools=self._tools_desc,
         )
-        print(f"phi3 json propt : undestanding :  start->>   {prompt}   <<-end")
         raw = await self._backend.chat(system=UNDERSTAND_SYSTEM, user=prompt)
-        print(f"phi3 json answer: undestanding :  start->>   {raw}   <<-endAnswer")
         try:
             data = _extract_json(raw)
             return _validate_understand(data, query)
         except Exception as e:
             logger.warning(f"understand() parse failed: {e}")
             return self._fallback_understand(query)
-        finally:
-            await self._backend.close()
+    def _calculate_quality_score(self, data: dict, query: str) -> float:
+        """
+        Calculate quality score for understanding and plan output.
+        
+        Score components:
+        - Has entities: +0.2
+        - Has sub_questions: +0.2
+        - Has valid steps: +0.3
+        - Steps have dependencies: +0.1
+        - Complexity matches query: +0.2
+        
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
+        score = 0.0
+        
+        # Check entities
+        if data.get('entities') and len(data['entities']) > 0:
+            score += 0.2
+        
+        # Check sub_questions
+        if data.get('sub_questions') and len(data['sub_questions']) > 0:
+            score += 0.2
+        
+        # Check steps
+        steps = data.get('steps', [])
+        if steps and len(steps) > 0:
+            score += 0.3
+            
+            # Check if steps have dependencies (indicates thoughtful planning)
+            has_deps = any(step.get('depends_on') for step in steps)
+            if has_deps:
+                score += 0.1
+        
+        # Check complexity alignment
+        query_len = len(query.split())
+        expected_complexity = min(5, max(1, query_len // 5))
+        actual_complexity = data.get('complexity', 1)
+        
+        if abs(expected_complexity - actual_complexity) <= 1:
+            score += 0.2
+        
+        return min(1.0, score)
 
 
     async def plan(self, query: str, understanding: dict) -> dict:
@@ -674,7 +800,6 @@ class Phi4MiniClient:
             understanding=json.dumps(understanding, ensure_ascii=False, indent=2),
         )
         raw = await self._backend.chat(system=PLAN_SYSTEM, user=prompt)
-        print(f"phi3 json: Plan :  start->>   {raw}   <<-end")
 
         try:
             data = _extract_json(raw)
@@ -682,8 +807,6 @@ class Phi4MiniClient:
         except Exception as e:
             logger.warning(f"plan() parse failed: {e}")
             return self._fallback_plan(understanding)
-        finally:
-            await self._backend.close()
 
 
     async def detect_gaps(self, query: str, context: str) -> dict:
@@ -730,8 +853,6 @@ class Phi4MiniClient:
                 "search_queries": [query],
                 "suggested_sources": ["vector"],
             }
-        finally:
-            await self._backend.close()
     
 
     async def select_tools(self, query: str, context: str = "") -> list[dict]:

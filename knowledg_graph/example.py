@@ -90,7 +90,7 @@ def main():
         print("\n📌 Inserting People...")
         people = [
             {"name": "Alice", "age": 30, "email": "alice@example.com", "city": "Tehran"},
-            {"name": "Bob",   "age": 25, "email": "bob@example.com",   "city": "Isfahan"},
+            {"name": "piter",   "age": 25, "email": "piter@example.com",   "city": "Isfahan"},
             {"name": "Carol", "age": 35, "email": "carol@example.com", "city": "Shiraz"},
             {"name": "David", "age": 28, "email": "david@example.com", "city": "Tehran"},
         ]
@@ -111,11 +111,11 @@ def main():
         helper.create_relationship(
             from_table="Person", from_props={"name": "Alice"},
             rel_table="KNOWS",
-            to_table="Person",   to_props={"name": "Bob"},
+            to_table="Person",   to_props={"name": "piter"},
             rel_props={"since": 2020, "strength": 0.9},
         )
         helper.create_relationship(
-            from_table="Person", from_props={"name": "Bob"},
+            from_table="Person", from_props={"name": "piter"},
             rel_table="KNOWS",
             to_table="Person",   to_props={"name": "Carol"},
             rel_props={"since": 2021, "strength": 0.7},
@@ -127,7 +127,7 @@ def main():
             rel_props={"role": "Engineer", "salary": 90000.0},
         )
         helper.create_relationship(
-            from_table="Person", from_props={"name": "Bob"},
+            from_table="Person", from_props={"name": "piter"},
             rel_table="WORKS_AT",
             to_table="Company",  to_props={"name": "DataInc"},
             rel_props={"role": "Analyst", "salary": 75000.0},

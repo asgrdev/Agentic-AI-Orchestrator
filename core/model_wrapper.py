@@ -90,4 +90,3 @@ def get_answer_model():
     """دریافت مدل پاسخ‌دهی"""
     return ModelWrapper("granite_answer", auto_cleanup=True)
 
-# Made with Bob

@@ -13,7 +13,7 @@ class EntityLinker:
 
         self.cache = {}
 
-        self.wiki = wikipediaapi.Wikipedia("en")
+        self.wiki = wikipediaapi.Wikipedia(    user_agent='MyAwesomeApp/1.0 (contact@myemail.com)',language="en")
 
     async def link_entities(self, entities: list[Entity]):
 

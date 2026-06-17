@@ -2,6 +2,14 @@
 MCP (Model Context Protocol) Server:
 سیستم را به عنوان یک MCP tool در دسترس
 Claude Desktop / Cursor / سایر کلاینت‌ها قرار می‌دهد
+
+Enhanced with MDSkills.ai MCP Tools:
+- Git operations
+- GitHub integration
+- File system operations
+- Database tools
+- Web scraping
+- Documentation generation
 """
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -11,6 +19,7 @@ from core.config import load_config
 import logging
 from agents.orchestrator import Orchestrator
 from workflow.agentic_graph_rag import AgenticGraphRAGWorkflow
+from mcp.mdskills_mcp_tools import MDSkillsMCPRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +28,9 @@ app = Server("agentic-graph-rag")
 config = load_config()
 workflow = AgenticGraphRAGWorkflow(config)
 orchestrator = Orchestrator(config)
+
+# Initialize MDSkills MCP tools
+mdskills_registry = MDSkillsMCPRegistry()
 
 
 # ─────────────────────────────────────
@@ -119,6 +131,197 @@ async def list_tools():
                     "max_hops":    {"type": "integer", "default": 2},
                 },
                 "required": ["entity_name"],
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - Git
+        # ─────────────────────────────────────
+        Tool(
+            name="git_status",
+            description="Get git repository status",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string", "default": "."}
+                },
+            },
+        ),
+        Tool(
+            name="git_log",
+            description="Get git commit history",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string", "default": "."},
+                    "max_count": {"type": "integer", "default": 10}
+                },
+            },
+        ),
+        Tool(
+            name="git_diff",
+            description="Get git diff",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo_path": {"type": "string", "default": "."},
+                    "file_path": {"type": "string"}
+                },
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - GitHub
+        # ─────────────────────────────────────
+        Tool(
+            name="github_search_repos",
+            description="Search GitHub repositories",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "max_results": {"type": "integer", "default": 10}
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="github_repo_info",
+            description="Get GitHub repository information",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "owner": {"type": "string"},
+                    "repo": {"type": "string"}
+                },
+                "required": ["owner", "repo"],
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - File System
+        # ─────────────────────────────────────
+        Tool(
+            name="read_file",
+            description="Read file content",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "encoding": {"type": "string", "default": "utf-8"}
+                },
+                "required": ["file_path"],
+            },
+        ),
+        Tool(
+            name="write_file",
+            description="Write content to file",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "encoding": {"type": "string", "default": "utf-8"}
+                },
+                "required": ["file_path", "content"],
+            },
+        ),
+        Tool(
+            name="list_directory",
+            description="List directory contents",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dir_path": {"type": "string"},
+                    "recursive": {"type": "boolean", "default": False},
+                    "pattern": {"type": "string", "default": "*"}
+                },
+                "required": ["dir_path"],
+            },
+        ),
+        Tool(
+            name="search_files",
+            description="Search files by name and content",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dir_path": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "content_pattern": {"type": "string"}
+                },
+                "required": ["dir_path", "pattern"],
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - Database
+        # ─────────────────────────────────────
+        Tool(
+            name="query_sqlite",
+            description="Execute SQLite query",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "db_path": {"type": "string"},
+                    "query": {"type": "string"}
+                },
+                "required": ["db_path", "query"],
+            },
+        ),
+        Tool(
+            name="list_sqlite_tables",
+            description="List all tables in SQLite database",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "db_path": {"type": "string"}
+                },
+                "required": ["db_path"],
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - Web
+        # ─────────────────────────────────────
+        Tool(
+            name="fetch_url",
+            description="Fetch URL content",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string", "default": "GET"}
+                },
+                "required": ["url"],
+            },
+        ),
+        Tool(
+            name="scrape_webpage",
+            description="Scrape webpage content",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "selector": {"type": "string"}
+                },
+                "required": ["url"],
+            },
+        ),
+        
+        # ─────────────────────────────────────
+        # MDSkills MCP Tools - Documentation
+        # ─────────────────────────────────────
+        Tool(
+            name="generate_api_docs",
+            description="Generate API documentation from code",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "code_path": {"type": "string"},
+                    "output_path": {"type": "string"},
+                    "format": {"type": "string", "default": "markdown"}
+                },
+                "required": ["code_path", "output_path"],
             },
         ),
     ]
@@ -263,6 +466,124 @@ async def call_tool(name: str, arguments: dict):
             )]    
             
             
+        # --------------------------------
+        # MDSkills MCP Tools - Git
+        # --------------------------------
+        elif name == "git_status":
+            result = mdskills_registry.git.git_status(
+                repo_path=arguments.get("repo_path", ".")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "git_log":
+            result = mdskills_registry.git.git_log(
+                repo_path=arguments.get("repo_path", "."),
+                max_count=arguments.get("max_count", 10)
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "git_diff":
+            result = mdskills_registry.git.git_diff(
+                repo_path=arguments.get("repo_path", "."),
+                file_path=arguments.get("file_path")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        # --------------------------------
+        # MDSkills MCP Tools - GitHub
+        # --------------------------------
+        elif name == "github_search_repos":
+            result = await mdskills_registry.github.search_repositories(
+                query=arguments["query"],
+                max_results=arguments.get("max_results", 10)
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "github_repo_info":
+            result = await mdskills_registry.github.get_repository_info(
+                owner=arguments["owner"],
+                repo=arguments["repo"]
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        # --------------------------------
+        # MDSkills MCP Tools - File System
+        # --------------------------------
+        elif name == "read_file":
+            result = mdskills_registry.filesystem.read_file(
+                file_path=arguments["file_path"],
+                encoding=arguments.get("encoding", "utf-8")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "write_file":
+            result = mdskills_registry.filesystem.write_file(
+                file_path=arguments["file_path"],
+                content=arguments["content"],
+                encoding=arguments.get("encoding", "utf-8")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "list_directory":
+            result = mdskills_registry.filesystem.list_directory(
+                dir_path=arguments["dir_path"],
+                recursive=arguments.get("recursive", False),
+                pattern=arguments.get("pattern", "*")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "search_files":
+            result = mdskills_registry.filesystem.search_files(
+                dir_path=arguments["dir_path"],
+                pattern=arguments["pattern"],
+                content_pattern=arguments.get("content_pattern")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        # --------------------------------
+        # MDSkills MCP Tools - Database
+        # --------------------------------
+        elif name == "query_sqlite":
+            result = mdskills_registry.database.query_sqlite(
+                db_path=arguments["db_path"],
+                query=arguments["query"]
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "list_sqlite_tables":
+            result = mdskills_registry.database.list_sqlite_tables(
+                db_path=arguments["db_path"]
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        # --------------------------------
+        # MDSkills MCP Tools - Web
+        # --------------------------------
+        elif name == "fetch_url":
+            result = await mdskills_registry.web.fetch_url(
+                url=arguments["url"],
+                method=arguments.get("method", "GET")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        elif name == "scrape_webpage":
+            result = await mdskills_registry.web.scrape_webpage(
+                url=arguments["url"],
+                selector=arguments.get("selector")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
+        # --------------------------------
+        # MDSkills MCP Tools - Documentation
+        # --------------------------------
+        elif name == "generate_api_docs":
+            result = mdskills_registry.docs.generate_api_docs(
+                code_path=arguments["code_path"],
+                output_path=arguments["output_path"],
+                format=arguments.get("format", "markdown")
+            )
+            return [TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))]
+        
         else:
             raise ValueError(f"Unknown tool: {name}")
 
@@ -270,8 +591,7 @@ async def call_tool(name: str, arguments: dict):
 
         logger.error(f"Tool {name} failed: {e}", exc_info=True)
 
-        return [
-                   ]
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}, ensure_ascii=False))]
 
 
 async def main():

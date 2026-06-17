@@ -57,7 +57,7 @@ class LLMRelationExtractor:
 
     def __init__(self, config):
 
-        model = config.get("relation_model")
+        model = config.get("model_name")
 
         self.llm = MLXLLM(model)
 

@@ -142,3 +142,7 @@ class AsyncKuzuManager:
 
     async def setup_schema(self) -> None:
         return await self._run(self._manager.setup_schema)
+
+    async def execute(self, query: str, parameters: Optional[dict] = None) -> QueryResult:
+        """Execute a raw Cypher query"""
+        return await self._run(self._client.execute, query, parameters or {})

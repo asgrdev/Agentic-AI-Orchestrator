@@ -188,4 +188,3 @@ def get_memory_monitor() -> MemoryMonitor:
         _memory_monitor = MemoryMonitor()
     return _memory_monitor
 
-# Made with Bob

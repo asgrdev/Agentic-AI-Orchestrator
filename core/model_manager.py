@@ -261,4 +261,3 @@ def get_model_manager() -> ModelManager:
         _model_manager = ModelManager()
     return _model_manager
 
-# Made with Bob

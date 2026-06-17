@@ -497,13 +497,10 @@ class WeaviateStore:
         alpha=0.0 → pure BM25
         alpha=0.5 → balanced
         """
-        print(f"{query_text}")
-        print(f"*"*50)
-        print(f"{query_embedding['embedding']}")
         col = self._collection(tenant)
         kwargs: dict[str, Any] = dict(
             query=query_text,
-            vector=query_embedding['embedding'],
+            vector=query_embedding,
             limit=top_k,
             alpha=alpha,
             fusion_type=fusion_type,

@@ -40,7 +40,7 @@ class KnowledgeCollector:
                 "links_count": len(page.links),
             }
         )
-    @with_timeout(30.0)    
+    @with_timeout(5.0)    
     def search_wikipedia(
         self,
         query: str,
@@ -72,7 +72,7 @@ class KnowledgeCollector:
         )
 
     # ─── HuggingFace Datasets ────────────────────────────────────────────
-    @with_timeout(120.0)
+    @with_timeout(5.0)#120.0)
     def load_hf_dataset(
         self,
         dataset_name: str,

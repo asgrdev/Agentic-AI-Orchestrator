@@ -140,7 +140,7 @@ class Qwen3EmbeddingClient:
 
         tokenizer = AutoTokenizer.from_pretrained(
             self.model_path,
-            trust_remote_code=True,
+          #  trust_remote_code=True,
         )
 
         # تنظیمات بارگذاری بر اساس سخت‌افزار
