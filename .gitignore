@@ -1,4 +1,4 @@
-# Python
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -9,49 +9,91 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-pythonenv*
+pythonenv*/
+.python-version
+MANIFEST
+*.egg-info/
+.installed.cfg
+*.egg
+*.spec
+*.manifest
 
-# Jupyter Notebooks
+# ── Build / dist ──────────────────────────────────────────────────────────────
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+var/
+wheels/
+python-wheels/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
-*.ipynb_checkpoints
 *.ipynb
-# Uncomment if you want to ignore output cells:
-# cell_names.json
-# .local/share/jupyter/
 
-# Data files (usually too large for git)
+# ── Data files ────────────────────────────────────────────────────────────────
 *.csv
+*.tsv
 *.xlsx
 *.xls
-*.json
 *.parquet
 *.feather
-*.h5
-*.hdf5
+*.arrow
+*.avro
+*.jsonl
+
+# ── Serialized / binary data ──────────────────────────────────────────────────
 *.pkl
 *.pickle
 *.joblib
+*.npy
+*.npz
+*.hdf5
+*.h5
+
+# ── Databases ─────────────────────────────────────────────────────────────────
 *.db
 *.sqlite
 *.sqlite3
+test_db/
+test_db_async/
+demo_db/
+data/kuzu_db/
 
-# Model files (large binaries)
+# ── ML model weights (large binaries) ─────────────────────────────────────────
 *.pth
 *.pt
 *.ckpt
 *.pb
-*.h5
-*.hdf5
 *.onnx
 *.tflite
-*.joblib
-*.pickle
+*.model
+*.weights
+*.weights.h5
+*.safetensors
+*.gguf
+*.ggml
+*.bin
+*.msgpack
 models/
 checkpoints/
-*.weights.h5
-*.model
 
-# Vector databases & embeddings
+# ── Package archives ──────────────────────────────────────────────────────────
+*.whl
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+*.bz2
+*.xz
+*.gz
+
+# ── Vector databases & embeddings ─────────────────────────────────────────────
 chroma_db/
 faiss_index/
 vectordb/
@@ -59,7 +101,52 @@ embeddings/
 *.lance
 *.milvus
 
-# Environment & secrets
+# ── Images ────────────────────────────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.tif
+*.webp
+*.ico
+*.svg
+*.heic
+*.heif
+*.raw
+
+# ── Video ─────────────────────────────────────────────────────────────────────
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+
+# ── Audio ─────────────────────────────────────────────────────────────────────
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.m4a
+*.wma
+
+# ── Documents ─────────────────────────────────────────────────────────────────
+*.pdf
+*.docx
+*.doc
+*.pptx
+*.ppt
+*.odt
+*.ods
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
 .env
 .env.local
 .env.*.local
@@ -72,7 +159,7 @@ secrets.yaml
 credentials.json
 token.pickle
 
-# IDE & editor files
+# ── IDE & editor ──────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
@@ -81,95 +168,53 @@ token.pickle
 .DS_Store
 .spyproject/
 .ropeproject/
+
+# ── Type checkers & linters ───────────────────────────────────────────────────
 .mypy_cache/
 .ruff_cache/
-.pytest_cache/
-.coverage
-htmlcov/
+.dmypy.json
+dmypy.json
+.pyre/
+.nil/
 
-# Logs & temp files
+# ── Testing & coverage ────────────────────────────────────────────────────────
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+htmlcov/
+.hypothesis/
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
 *.log
 logs/
 temp/
 tmp/
 *.tmp
 *.temp
-debudebudebudebudebudebudebu& debudeblodebudebudeb #debudeburudebudebresudeb/ debude tune results
 
-# Deep Learning framew# Deep LeTor# Deep Learnilightni# Deep Learning frmp# Deep Learning frensorboard# Deep Learning framew# Deep LeTor# Deep Leag Fa# Deep Learnine/
-cache/
-# ONNX
-onnx_logs/
-
-# MLflow
+# ── ML experiment tracking ────────────────────────────────────────────────────
 mlruns/
 mlflow.db
-
-# DVC (Data Version# DVCro#)
-.dvc/
-.dvc/tmp/
-*.dvc
-
-# Large output directories
 outputs/
 results/
 figures/
 plots/
-reportsreportsreportsreportsreportsdatr/interim/
-reporexternal/
+reports/
+cache/
 
-# Testing
-.pytest_cache/
-.tox/
-.coverage
-coverage.xml
-*.cover
-htmlcov/
-.tox/
-noxfile.noxfile.noxfile.noxfile.noxributnoxfile.nkanoxfile.noxn
-build/
-devdevdevdevd
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/parts/p
-var/
-wheels/
-shashasython-wheels/
-*.egg-info/
-.installed.c.installeMANI.installed.c.inller
-*.manifest
-*.spec
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.cove.cove*
-.cache
-.cachests.xml
-coverage.xmlcoverage.xmly,cover
-.hypothesis/
-.p.p.p.p.p.p.p.p.p.p/
-
-# pye# p.python-v# pion
-
-# p# pnv
-PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP/
-.dmypy.json
-dmypy.json
-
-# pyre type checker
-.pyre/
-
-# Language servers
-.nil/
-
-# Profiling data
+# ── TensorBoard / profiling ───────────────────────────────────────────────────
+runs/
+tb_logs/
+tensorboard/
+onnx_logs/
 *.prof
 *.lprof
-*.db
+
+# ── DVC ───────────────────────────────────────────────────────────────────────
+.dvc/
+.dvc/tmp/
+*.dvc
