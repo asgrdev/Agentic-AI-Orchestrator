@@ -74,7 +74,7 @@ class AdaptiveOrchestrator:
         # نگاشت انتقال‌های مجاز (برای validation)
         self._transitions: dict[FlowStep, list[FlowStep]] = {
             FlowStep.START:      [FlowStep.UNDERSTAND],
-            FlowStep.UNDERSTAND: [FlowStep.RETRIEVE, FlowStep.ERROR],
+            FlowStep.UNDERSTAND: [FlowStep.RETRIEVE, FlowStep.REFRESH, FlowStep.REASON, FlowStep.ANSWER, FlowStep.ERROR],
             FlowStep.RETRIEVE:   [FlowStep.ASSESS, FlowStep.REASON],  # می‌تواند مستقیم به REASON برود
             FlowStep.ASSESS:     [FlowStep.REASON, FlowStep.REFRESH],
             FlowStep.REFRESH:    [FlowStep.RETRIEVE],
@@ -150,25 +150,67 @@ class AdaptiveOrchestrator:
                 state.plan_steps = result["steps"]
                 state.strategy = result["strategy"]
         
-        # 3. اجرای tool calls (اگر وجود دارد)
+        # 3. اجرای tool calls — only execute non-retrieval tools (calculate,
+        #    summarize, etc.) since retrieval is handled by the dynamic plan
+        _retrieval_tools = {"search", "web_search", "retrieve", "graph_query"}
         if state.tool_calls:
-            logger.info(f"Executing {len(state.tool_calls)} tool calls from phi4")
-            await self._execute_tool_calls(state)
-        
-        # 4. اجرای plan steps (اگر وجود دارد و strategy مناسب است)
-        if state.plan_steps and state.strategy in ["sequential", "parallel", "iterative"]:
-            logger.info(f"Executing {len(state.plan_steps)} plan steps from phi4")
+            actionable_calls = [
+                tc for tc in state.tool_calls
+                if tc.get("tool") not in _retrieval_tools
+            ]
+            if actionable_calls:
+                logger.info(f"Executing {len(actionable_calls)} tool calls from phi4")
+                original_calls = state.tool_calls
+                state.tool_calls = actionable_calls
+                await self._execute_tool_calls(state)
+                state.tool_calls = original_calls
+            else:
+                logger.info(
+                    f"Skipping {len(state.tool_calls)} retrieval-type tool calls "
+                    f"(handled by dynamic plan)"
+                )
+
+        # 3.5. If tool calls already answered the query, short-circuit
+        if self._tool_results_answer_query(state, query_analysis):
+            state.query_analysis = query_analysis
+            state.dynamic_plan = DynamicPlan(
+                required_steps=[], skip_steps=[], max_iterations=0
+            )
+            state.timings["understand"] = time.perf_counter() - t0
+            state.current_step = FlowStep.ANSWER
+            return
+
+        # 4. اجرای plan steps — skip retrieval-type steps since the dynamic
+        #    plan handles RETRIEVE/REFRESH via the real agents
+        _retrieval_actions = {"retrieve", "search", "web_search"}
+        actionable_steps = [
+            s for s in (state.plan_steps or [])
+            if s.get("action") not in _retrieval_actions
+            and s.get("tool") not in _retrieval_actions
+        ]
+        if actionable_steps and state.strategy in ["sequential", "parallel", "iterative"]:
+            logger.info(f"Executing {len(actionable_steps)} non-retrieval plan steps from phi4")
+            state.plan_steps = actionable_steps
             await self._execute_plan_steps(state)
-        
+
         # 5. تولید Dynamic Plan
         dynamic_plan = self._generate_dynamic_plan(query_analysis, state)
         state.dynamic_plan = dynamic_plan
-        
+
         # ذخیره query_analysis در state
         state.query_analysis = query_analysis
-        
+
         state.timings["understand"] = time.perf_counter() - t0
-        state.current_step = FlowStep.RETRIEVE
+
+        # Set initial step to the first required step in the dynamic plan
+        if dynamic_plan.required_steps:
+            state.current_step = dynamic_plan.required_steps[0]
+        else:
+            state.current_step = FlowStep.RETRIEVE
+
+        # If plan requires refresh, set the flag so refresh agent acts on it
+        if dynamic_plan.force_refresh:
+            state.refresh_needed = True
     
     # ══════════════════════════════════════════════════════════════
     # Dynamic Plan Generation
@@ -197,7 +239,7 @@ class AdaptiveOrchestrator:
             plan.required_steps = [FlowStep.REFRESH, FlowStep.RETRIEVE, FlowStep.REASON, FlowStep.VALIDATE]
             plan.skip_steps = []
             plan.force_refresh = True
-            plan.max_iterations = 1
+            plan.max_iterations = 5
             
         elif analysis.query_type == QueryType.MULTI_HOP:
             # چند مرحله‌ای: تکرار retrieve
@@ -217,6 +259,14 @@ class AdaptiveOrchestrator:
             plan.skip_steps = []
             plan.max_iterations = 3
             
+        elif analysis.query_type == QueryType.CALCULATION:
+            plan.required_steps = [FlowStep.REASON]
+            plan.skip_steps = [FlowStep.RETRIEVE, FlowStep.ASSESS, FlowStep.REFRESH, FlowStep.VALIDATE]
+            plan.max_iterations = 1
+            plan.allow_early_exit = True
+            plan.use_simple_answer = True
+            plan.disable_graph_traversal = True
+
         elif analysis.query_type == QueryType.CREATIVE:
             # خلاقانه: کم‌تر retrieval
             plan.required_steps = [FlowStep.REASON]
@@ -336,10 +386,12 @@ class AdaptiveOrchestrator:
         
         logger.info(f"Executing {len(state.tool_calls)} tool calls")
         
-        # اجرای tool calls
+        # اجرای tool calls with query context for auto-filling missing args
+        context = {"query": state.query}
         results = await self.skill_executor.execute_multiple_skills(
             state.tool_calls,
-            parallel=False  # ترتیبی برای حفظ dependencies
+            parallel=False,  # ترتیبی برای حفظ dependencies
+            context=context
         )
         
         # ذخیره نتایج در state
@@ -383,9 +435,10 @@ class AdaptiveOrchestrator:
             
             logger.info(f"Executing step {step_id}: {action}")
             
-            # بررسی dependencies
+            # بررسی dependencies (normalize types for comparison)
             if depends_on:
-                missing_deps = [dep for dep in depends_on if dep not in step_results]
+                result_keys = {str(k) for k in step_results}
+                missing_deps = [dep for dep in depends_on if str(dep) not in result_keys]
                 if missing_deps:
                     logger.error(f"Step {step_id} has missing dependencies: {missing_deps}")
                     step_results[step_id] = {
@@ -396,14 +449,23 @@ class AdaptiveOrchestrator:
             
             # اجرای step
             try:
+                skill_context = {"query": state.query}
                 if tool:
-                    # اگر tool مشخص شده، از skill executor استفاده کن
-                    result = await self.skill_executor.execute_skill(tool, args)
-                    step_results[step_id] = {
-                        "success": result.success,
-                        "output": result.output,
-                        "error": result.error
-                    }
+                    result = await self.skill_executor.execute_skill(tool, args, skill_context)
+                    if not result.success and isinstance(result.error, str) and "missing" in result.error.lower():
+                        # tool called with wrong/missing args — fall through to action handler
+                        logger.warning(
+                            "Step %s: tool '%s' rejected args %s (%s), falling back to action '%s'",
+                            step_id, tool, args, result.error, action
+                        )
+                        result = await self._execute_action(action, state, {}, step_results)
+                        step_results[step_id] = result
+                    else:
+                        step_results[step_id] = {
+                            "success": result.success,
+                            "output": result.output,
+                            "error": result.error,
+                        }
                 else:
                     # اگر tool نیست، بر اساس action اجرا کن
                     result = await self._execute_action(action, state, args, step_results)
@@ -475,10 +537,22 @@ class AdaptiveOrchestrator:
                 }
             
             elif action == "summarize":
-                # خلاصه‌سازی
+                text = args.get("text", "")
+                if not text:
+                    chunks = state.retrieval.vector_chunks[:5] if state.retrieval else []
+                    text = "\n".join(ch.get("content", "") for ch in chunks)
+                if text:
+                    result = await self.skill_executor.execute_skill(
+                        "summarize", {"text": text}, {"query": state.query}
+                    )
+                    return {
+                        "success": result.success,
+                        "output": result.output,
+                        "error": result.error,
+                    }
                 return {
                     "success": True,
-                    "output": {"summary": "Summary completed"}
+                    "output": {"summary": "No text available to summarize"}
                 }
             
             elif action == "compare":
@@ -561,6 +635,7 @@ class AdaptiveOrchestrator:
     
     async def _step_refresh(self, state: AgentState, plan: DynamicPlan) -> FlowStep:
         """مرحله REFRESH"""
+        state.refresh_needed = True
         await self.refresher.startup()
         await self.refresher.refresh(state)
         return FlowStep.RETRIEVE
@@ -604,6 +679,38 @@ class AdaptiveOrchestrator:
     # Helpers
     # ══════════════════════════════════════════════════════════════
     
+    def _tool_results_answer_query(
+        self, state: AgentState, analysis: QueryAnalysis
+    ) -> bool:
+        """Check if tool results already answer the query (e.g. calculate)."""
+        if not state.tool_results:
+            return False
+
+        if analysis.query_type not in (QueryType.CALCULATION,):
+            return False
+
+        successful = [tr for tr in state.tool_results if tr.get("success")]
+        if not successful:
+            return False
+
+        parts = []
+        for tr in successful:
+            output = tr.get("output", {})
+            if isinstance(output, dict) and "result" in output:
+                expr = output.get("expression", "")
+                result = output["result"]
+                parts.append(f"{expr} = {result}" if expr else str(result))
+            elif isinstance(output, dict) and "summary" in output:
+                parts.append(output["summary"])
+
+        if parts:
+            state.final_answer = "\n".join(parts)
+            state.confidence = 1.0
+            logger.info(f"Tool results answered query directly: {state.final_answer}")
+            return True
+
+        return False
+
     def _should_early_exit(self, state: AgentState, plan: DynamicPlan) -> bool:
         """آیا می‌توانیم زودتر خارج شویم؟"""
         # confidence بالا

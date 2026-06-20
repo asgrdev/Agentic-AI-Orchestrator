@@ -451,39 +451,24 @@ def build_backend(cfg: dict) -> LLMBackend:
 
 def _extract_json(text: str) -> dict:
     """
-    JSON را از متن خام استخراج می‌کند.
-    مدل‌ها گاهی markdown fence یا متن اضافه تولید می‌کنند.
+    Extract the first complete JSON object from raw model output.
+    Uses raw_decode so trailing text / extra objects are ignored cleanly.
     """
-    # تلاش مستقیم
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.exception("JSON Exeption1: %s", "--------------------")
-        pass
+    text = text.strip()
 
-    # پیدا کردن اولین { ... } معتبر
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m is None:
-        raise ValueError(f"No valid JSON found in model output:\n-----\n{text}")
+    # strip markdown fences if present
+    if text.startswith("```"):
+        text = re.sub(r"^```[^\n]*\n?", "", text).rstrip("`").strip()
 
-    matched = m.group()
-
-    # مدل‌های phi ممکن است چندین JSON با <|end|> بین آن‌ها تولید کنند؛ اولی را نگه می‌داریم
-    end_token_pos = matched.find("<|end|>")
-    if end_token_pos != -1:
-        matched = matched[:end_token_pos].strip()
-        last_brace = matched.rfind("}")
-        if last_brace != -1:
-            matched = matched[:last_brace + 1]
-
-    if matched:
+    start = text.find("{")
+    if start != -1:
         try:
-            return json.loads(matched)
+            obj, _ = json.JSONDecoder().raw_decode(text, start)
+            return obj
         except json.JSONDecodeError:
-            logger.exception("JSON Exeption2: %s", "--------------------")
             pass
 
-    raise ValueError(f"No valid JSON found in model output:\n-----\n{text}")
+    raise ValueError(f"No valid JSON found in model output:\n-----\n{text[:300]}")
 
 
 def _validate_understand(data: dict, query: str) -> dict:
@@ -575,7 +560,7 @@ class Phi4MiniClient:
 
       
         self._backend: LLMBackend = build_backend(cfg)
-        self._tools_desc: str = self._build_tools_desc()
+        self._tools_desc: str = self._build_tools_desc_withparam()
     async def __aenter__(self):
         return self
 
@@ -898,6 +883,14 @@ class Phi4MiniClient:
                 step["action"] = "retrieve"
             if step["tool"] and step["tool"] not in known_tools:
                 step["tool"] = None
+
+            # Tool must be compatible with the step action; e.g. a "retrieve"
+            # step should not carry a "calculate" tool with no expression arg.
+            _retrieval_tools = {None, "retrieve", "search", "graph_query", "web_search"}
+            _compute_tools = {"calculate"}
+            if step["action"] == "retrieve" and step["tool"] in _compute_tools:
+                step["tool"] = None
+                step["args"] = {}
 
             validated_steps.append(step)
 

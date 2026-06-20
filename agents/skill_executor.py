@@ -170,6 +170,36 @@ class SkillRegistry:
             SkillType.CALCULATE
         )
 
+        # Summarize skill
+        async def summarize_skill(text: str, max_sentences: int = 3) -> Dict[str, Any]:
+            """خلاصه‌سازی متن"""
+            logger.info(f"Summarizing text ({len(text)} chars)")
+            sentences = [s.strip() for s in text.replace('\n', '. ').split('.') if s.strip()]
+            summary = '. '.join(sentences[:max_sentences]) + '.' if sentences else text[:200]
+            return {"text": text[:200], "max_sentences": max_sentences, "summary": summary}
+
+        self.register(
+            "summarize",
+            summarize_skill,
+            "Summarize a block of text",
+            {"text": "string", "max_sentences": "int"},
+            SkillType.SUMMARIZE
+        )
+
+        # Retrieve skill
+        async def retrieve_skill(query: str, top_k: int = 5) -> Dict[str, Any]:
+            """بازیابی از vector store"""
+            logger.info(f"Retrieve skill called for: {query}")
+            return {"query": query, "top_k": top_k, "chunks": []}
+
+        self.register(
+            "retrieve",
+            retrieve_skill,
+            "Retrieve relevant document chunks from the vector store",
+            {"query": "string", "top_k": "int"},
+            SkillType.RETRIEVE
+        )
+
 
 class SkillExecutor:
     """
@@ -194,20 +224,21 @@ class SkillExecutor:
     ) -> SkillResult:
         """
         اجرای یک skill
-        
+
         Args:
             skill_name: نام skill
             args: آرگومان‌های skill
-            context: context اضافی
-            
+            context: context اضافی (may contain 'query' for fallback)
+
         Returns:
             SkillResult با نتیجه اجرا
         """
         import time
+        import inspect
         from asyncio import iscoroutinefunction
-        
+
         start_time = time.time()
-        
+
         try:
             # بررسی وجود skill
             if not self.registry.has_skill(skill_name):
@@ -218,13 +249,22 @@ class SkillExecutor:
                     error=f"Skill '{skill_name}' not found",
                     execution_time=time.time() - start_time
                 )
-            
+
             # دریافت skill
             skill_func = self.registry.get(skill_name)
-            
+
+            # Auto-fill missing required args from context
+            sig = inspect.signature(skill_func)
+            for param_name, param in sig.parameters.items():
+                if param_name not in args and param.default is inspect.Parameter.empty:
+                    if context and param_name in context:
+                        args[param_name] = context[param_name]
+                    elif param_name == "query" and context and "query" in context:
+                        args["query"] = context["query"]
+
             # اجرا
             logger.info(f"Executing skill: {skill_name} with args: {args}")
-            
+
             if iscoroutinefunction(skill_func):
                 output = await skill_func(**args)
             else:
@@ -301,22 +341,24 @@ class SkillExecutor:
     async def execute_multiple_skills(
         self,
         skill_calls: List[Dict[str, Any]],
-        parallel: bool = False
+        parallel: bool = False,
+        context: Optional[Dict[str, Any]] = None
     ) -> List[SkillResult]:
         """
         اجرای چندین skill
-        
+
         Args:
             skill_calls: لیست skill calls با format {"tool": "name", "args": {...}}
             parallel: اجرای موازی یا ترتیبی
-            
+            context: context اضافی for auto-filling missing args
+
         Returns:
             لیست SkillResult
         """
         if parallel:
             import asyncio
             tasks = [
-                self.execute_skill(call["tool"], call.get("args", {}))
+                self.execute_skill(call["tool"], call.get("args", {}), context)
                 for call in skill_calls
             ]
             raw = await asyncio.gather(*tasks, return_exceptions=True)
@@ -328,7 +370,7 @@ class SkillExecutor:
         else:
             results = []
             for call in skill_calls:
-                result = await self.execute_skill(call["tool"], call.get("args", {}))
+                result = await self.execute_skill(call["tool"], call.get("args", {}), context)
                 results.append(result)
             return results
     

@@ -176,8 +176,21 @@ async def startAdaptiveOrchestrator(message, iface):
         # بررسی نوع نتیجه
         if isinstance(result, str):
             return result
-        elif hasattr(result, 'final_answer'):
+        elif hasattr(result, 'final_answer') and result.final_answer:
             return result.final_answer
+        elif hasattr(result, 'tool_results') and result.tool_results:
+            parts = []
+            for tr in result.tool_results:
+                if tr.get("success") and isinstance(tr.get("output"), dict):
+                    out = tr["output"]
+                    if "result" in out:
+                        expr = out.get("expression", "")
+                        parts.append(f"{expr} = {out['result']}" if expr else str(out["result"]))
+                    elif "summary" in out and out["summary"]:
+                        parts.append(out["summary"])
+            if parts:
+                return "\n".join(parts)
+            return str(result)
         else:
             return str(result)
             

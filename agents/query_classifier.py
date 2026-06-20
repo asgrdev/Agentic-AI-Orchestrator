@@ -26,6 +26,7 @@ class QueryType(Enum):
     COMPARATIVE = "comparative"              # مقایسه‌ای
     AGGREGATION = "aggregation"              # جمع‌آوری از چند منبع
     CREATIVE = "creative"                    # خلاقانه (کم‌تر نیاز به retrieval)
+    CALCULATION = "calculation"              # محاسبات ریاضی
 
 
 class QueryComplexity(Enum):
@@ -84,6 +85,16 @@ class QueryClassifier:
         r'\b(رابطه|relation|ارتباط|connection)\b',
     ]
     
+    # الگوهای محاسباتی
+    CALCULATION_PATTERNS = [
+        r'\d+\s*%\s*(of|از)\s*\d+',
+        r'\d+\s*[\+\-\*\/\^]\s*\d+',
+        r'\b(calculate|compute|محاسبه|حساب)\b',
+        r'\b(sqrt|square root|جذر|ریشه)\b',
+        r'\b(sum|average|mean|total|جمع|میانگین)\b.*\d',
+        r'^\s*\d[\d\s\+\-\*\/\.\%\(\)]+\d\s*$',
+    ]
+
     # کلمات کلیدی ساده
     SIMPLE_KEYWORDS = [
         'چیست', 'کیست', 'کجاست', 'what', 'who', 'where', 'when',
@@ -95,6 +106,7 @@ class QueryClassifier:
         self._comparative_re = re.compile('|'.join(self.COMPARATIVE_PATTERNS), re.IGNORECASE)
         self._creative_re = re.compile('|'.join(self.CREATIVE_PATTERNS), re.IGNORECASE)
         self._multi_hop_re = re.compile('|'.join(self.MULTI_HOP_PATTERNS), re.IGNORECASE)
+        self._calculation_re = re.compile('|'.join(self.CALCULATION_PATTERNS), re.IGNORECASE)
     
     def classify(self, query: str) -> QueryAnalysis:
         """
@@ -155,6 +167,10 @@ class QueryClassifier:
     ) -> QueryType:
         """تشخیص نوع query"""
         
+        # 0. Calculation
+        if self._calculation_re.search(query):
+            return QueryType.CALCULATION
+
         # 1. Creative
         if self._creative_re.search(query):
             return QueryType.CREATIVE
@@ -191,7 +207,7 @@ class QueryClassifier:
         """ارزیابی پیچیدگی"""
         
         # بر اساس نوع
-        if query_type in (QueryType.SIMPLE_FACT, QueryType.CREATIVE):
+        if query_type in (QueryType.SIMPLE_FACT, QueryType.CREATIVE, QueryType.CALCULATION):
             return QueryComplexity.LOW
         
         if query_type in (QueryType.TEMPORAL, QueryType.COMPARATIVE):
@@ -224,7 +240,7 @@ class QueryClassifier:
         complexity: QueryComplexity,
     ) -> bool:
         """آیا نیاز به graph traversal دارد؟"""
-        if query_type == QueryType.CREATIVE:
+        if query_type in (QueryType.CREATIVE, QueryType.CALCULATION):
             return False
         if query_type in (QueryType.MULTI_HOP, QueryType.COMPARATIVE):
             return True
@@ -238,7 +254,7 @@ class QueryClassifier:
         complexity: QueryComplexity,
     ) -> bool:
         """آیا نیاز به reasoning پیچیده دارد؟"""
-        if query_type == QueryType.SIMPLE_FACT:
+        if query_type in (QueryType.SIMPLE_FACT, QueryType.CALCULATION):
             return False
         return True
     
@@ -251,6 +267,7 @@ class QueryClassifier:
         base_steps = {
             QueryType.SIMPLE_FACT: 2,
             QueryType.CREATIVE: 1,
+            QueryType.CALCULATION: 1,
             QueryType.TEMPORAL: 4,
             QueryType.COMPARATIVE: 5,
             QueryType.MULTI_HOP: 6,
@@ -274,7 +291,9 @@ class QueryClassifier:
         complexity: QueryComplexity,
     ) -> str:
         """پیشنهاد strategy"""
-        if query_type == QueryType.SIMPLE_FACT:
+        if query_type == QueryType.CALCULATION:
+            return "direct_skill"
+        elif query_type == QueryType.SIMPLE_FACT:
             return "fast_retrieval"
         elif query_type == QueryType.CREATIVE:
             return "direct_generation"
@@ -307,7 +326,7 @@ class QueryClassifier:
     ) -> float:
         """محاسبه confidence در classification"""
         # confidence بالا برای pattern های واضح
-        if query_type in (QueryType.CREATIVE, QueryType.TEMPORAL):
+        if query_type in (QueryType.CREATIVE, QueryType.TEMPORAL, QueryType.CALCULATION):
             return 0.9
         
         # confidence متوسط برای بقیه
