@@ -119,7 +119,15 @@ async def chatbot(message, history):
         
         # اجرای adaptive orchestrator
         state = await GLOBAL_ADAPTIVE_ORCH.run(user_command, "gradio-session")
-        output = state.final_answer if hasattr(state, 'final_answer') and state.final_answer else str(state)
+        # هرگز state خام را به کاربر نشان نده — فقط پاسخ یا پیام خطای خوانا
+        if getattr(state, "final_answer", ""):
+            output = state.final_answer
+        else:
+            errs = "\n".join(f"- {e}" for e in getattr(state, "errors", [])) or "- (بدون جزئیات)"
+            output = (
+                f"پاسخی تولید نشد (مرحله: {state.current_step.value}).\n"
+                f"خطاها:\n{errs}"
+            )
 
         # پایان tracking با مقادیر واقعی از state
         from agents.state import FlowStep

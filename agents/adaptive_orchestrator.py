@@ -112,7 +112,15 @@ class AdaptiveOrchestrator:
             state.errors.append(str(e))
         finally:
             gc.collect()
-        
+
+        # حتی در حالت خطا هم پیام قابل نمایش برگردان
+        if not state.final_answer:
+            last_error = state.errors[-1] if state.errors else "unknown"
+            state.final_answer = (
+                "متأسفانه پردازش این سوال کامل نشد و پاسخی تولید نشد. "
+                f"(مرحله: {state.current_step.value} | خطا: {last_error})"
+            )
+
         logger.info(f"Query completed: {state.current_step} | confidence: {state.confidence:.2f}")
         return state
     
@@ -311,26 +319,41 @@ class AdaptiveOrchestrator:
     async def _execute_dynamic_plan(self, state: AgentState) -> None:
         """اجرای plan داینامیک"""
         plan: DynamicPlan = state.dynamic_plan
-        
+
+        # iteration = تعداد چرخه‌ها (بازگشت به step قبلاً اجرا شده)،
+        # نه تعداد step ها — وگرنه فلوی ۵ مرحله‌ای با max_iterations=2 وسط راه قطع می‌شود
+        executed_steps: set[FlowStep] = set()
+
         while state.current_step not in (FlowStep.ANSWER, FlowStep.ERROR):
             if state.iteration >= plan.max_iterations:
-                logger.warning("Max iterations reached")
+                logger.warning("Max iterations reached — finalizing with best-effort answer")
+                await self._finalize_best_effort(state, plan)
                 break
-            
+
             # بررسی early exit
             if plan.allow_early_exit and self._should_early_exit(state, plan):
                 logger.info("Early exit triggered")
                 state.current_step = FlowStep.ANSWER
                 break
-            
+
             # اجرای step فعلی
+            current = state.current_step
             next_step = await self._execute_step(state, plan)
-            
-            # انتقال
-            if next_step:
-                self._transition(state, next_step)
-            
-            state.iteration += 1
+            executed_steps.add(current)
+
+            if next_step is None:
+                next_step = FlowStep.ANSWER
+
+            # بازگشت به step قبلی = یک چرخه کامل
+            if next_step in executed_steps:
+                state.iteration += 1
+                executed_steps.clear()
+
+            self._transition(state, next_step)
+
+        # هیچ‌وقت بدون پاسخ خارج نشو (UI فقط final_answer را نشان می‌دهد)
+        if state.current_step == FlowStep.ANSWER and not state.final_answer:
+            await self._finalize_best_effort(state, plan)
     
     async def _execute_step(
         self,
@@ -434,7 +457,15 @@ class AdaptiveOrchestrator:
             args = step.get("args", {})
             
             logger.info(f"Executing step {step_id}: {action}")
-            
+
+            # هر step باید query خودش را بگیرد (refined از planner)،
+            # نه query خام کاربر — وگرنه همه tool ها پیام یکسان و خام می‌گیرند
+            step_query = (
+                args.get("query")
+                or step.get("description")
+                or state.query
+            )
+
             # بررسی dependencies (normalize types for comparison)
             if depends_on:
                 result_keys = {str(k) for k in step_results}
@@ -449,7 +480,7 @@ class AdaptiveOrchestrator:
             
             # اجرای step
             try:
-                skill_context = {"query": state.query}
+                skill_context = {"query": step_query}
                 if tool:
                     result = await self.skill_executor.execute_skill(tool, args, skill_context)
                     if not result.success and isinstance(result.error, str) and "missing" in result.error.lower():
@@ -458,7 +489,9 @@ class AdaptiveOrchestrator:
                             "Step %s: tool '%s' rejected args %s (%s), falling back to action '%s'",
                             step_id, tool, args, result.error, action
                         )
-                        result = await self._execute_action(action, state, {}, step_results)
+                        result = await self._execute_action(
+                            action, state, {"query": step_query}, step_results
+                        )
                         step_results[step_id] = result
                     else:
                         step_results[step_id] = {
@@ -611,32 +644,37 @@ class AdaptiveOrchestrator:
     async def _step_assess(self, state: AgentState, plan: DynamicPlan) -> FlowStep:
         """مرحله ASSESS"""
         confidence = state.retrieval.confidence
-        
+
+        # refresh فقط تا سقف مجاز — وگرنه فلوی temporal در حلقه
+        # ASSESS→REFRESH→RETRIEVE→ASSESS گیر می‌کند و هیچ‌وقت به REASON نمی‌رسد
+        can_refresh = self._can_refresh(state, plan)
+
         # بررسی confidence
-        if confidence < self.config.get("confidence_threshold", 0.65):
-            if plan.force_refresh or state.iteration < plan.max_iterations:
-                state.refresh_needed = True
-                return FlowStep.REFRESH
-        
+        if confidence < self.config.get("confidence_threshold", 0.65) and can_refresh:
+            state.refresh_needed = True
+            return FlowStep.REFRESH
+
         # Gap detection (اگر Phi4 موجود باشد)
-        if "phi4_mini_factory" in self.config and state.iteration < plan.max_iterations:
+        if "phi4_mini_factory" in self.config and can_refresh:
             fused_context = "\n".join(
                 ch.get("content", "") for ch in state.retrieval.vector_chunks[:5]
             )
-            
+
             async with self.config["phi4_mini_factory"]() as phi4:
                 gap = await phi4.detect_gaps(state.query, fused_context)
-            
+
             if not gap.get("sufficient", True) and gap.get("confidence", 1.0) < 0.7:
                 state.refresh_needed = True
                 return FlowStep.REFRESH
-        
+
         return FlowStep.REASON
-    
+
     async def _step_refresh(self, state: AgentState, plan: DynamicPlan) -> FlowStep:
         """مرحله REFRESH"""
         state.refresh_needed = True
-        await self.refresher.startup()
+        state.refresh_attempts += 1
+        if not self.refresher._ready:
+            await self.refresher.startup()
         await self.refresher.refresh(state)
         return FlowStep.RETRIEVE
     
@@ -660,20 +698,21 @@ class AdaptiveOrchestrator:
     async def _step_validate(self, state: AgentState, plan: DynamicPlan) -> FlowStep:
         """مرحله VALIDATE"""
         result = await self.validator.validate(state)
-        
-        if state.iteration < plan.max_iterations:
-            if result["score"] >= plan.confidence_threshold:
-                state.final_answer = result["answer"]
-                state.confidence = result["score"]
-                return FlowStep.ANSWER
-            elif result["score"] >= 0.50:
-                return FlowStep.RETRIEVE
-            else:
-                return FlowStep.REFRESH
-        else:
-            state.final_answer = result["answer"]
-            state.confidence = result["score"]
+
+        # همیشه بهترین پاسخ فعلی را نگه دار تا خروج در هر نقطه‌ای پاسخ داشته باشد
+        state.final_answer = result["answer"] or state.final_answer
+        state.confidence = result["score"]
+
+        if result["score"] >= plan.confidence_threshold:
             return FlowStep.ANSWER
+        if state.iteration >= plan.max_iterations:
+            return FlowStep.ANSWER
+        if result["score"] >= 0.50:
+            return FlowStep.RETRIEVE
+        if self._can_refresh(state, plan):
+            return FlowStep.REFRESH
+        # نه refresh مجاز است نه پاسخ بهتری در دسترس — با همین پاسخ خارج شو
+        return FlowStep.ANSWER
     
     # ══════════════════════════════════════════════════════════════
     # Helpers
@@ -710,6 +749,38 @@ class AdaptiveOrchestrator:
             return True
 
         return False
+
+    def _can_refresh(self, state: AgentState, plan: DynamicPlan) -> bool:
+        """آیا هنوز بودجه refresh باقی مانده است؟"""
+        budget = max(1, plan.max_retrieve_iterations)
+        return state.refresh_attempts < budget
+
+    async def _finalize_best_effort(self, state: AgentState, plan: DynamicPlan) -> None:
+        """
+        تولید بهترین پاسخ ممکن قبل از خروج — فلو هیچ‌وقت نباید بدون
+        final_answer تمام شود (UI فقط همین فیلد را نشان می‌دهد)
+        """
+        if not state.final_answer:
+            try:
+                await self._step_reason(state, plan)
+            except Exception as e:
+                logger.error("Best-effort reasoning failed: %s", e, exc_info=True)
+                state.errors.append(f"finalize_reason: {e}")
+
+        if not state.final_answer:
+            if state.errors:
+                state.final_answer = (
+                    "متأسفانه پردازش این سوال با خطا مواجه شد و پاسخی تولید نشد. "
+                    f"(آخرین خطا: {state.errors[-1]})"
+                )
+            else:
+                state.final_answer = (
+                    "اطلاعات کافی برای پاسخ به این سوال در دانش فعلی سیستم یافت نشد. "
+                    "لطفاً سوال را دقیق‌تر مطرح کنید یا منابع جدیدی اضافه کنید."
+                )
+            state.confidence = 0.0
+
+        state.current_step = FlowStep.ANSWER
 
     def _should_early_exit(self, state: AgentState, plan: DynamicPlan) -> bool:
         """آیا می‌توانیم زودتر خارج شویم؟"""

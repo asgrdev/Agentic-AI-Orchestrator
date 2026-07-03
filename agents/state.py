@@ -44,7 +44,7 @@ class AgentState:
     linked_entities:     list[dict] = field(default_factory=list)  # Entity Linking
     tool_calls:          list[dict] = field(default_factory=list)  # از phi4-mini
     plan_steps:          list[dict] = field(default_factory=list)  # از phi4-mini
-    strategy:            list[dict] = field(default_factory=list)  # از phi4-mini
+    strategy:            str = "sequential"                        # از phi4-mini
     sub_questions:       list[str] = field(default_factory=list)
 
     # بازیابی
@@ -53,6 +53,7 @@ class AgentState:
                          )
     knowledge_gaps:      list[str] = field(default_factory=list)
     refresh_needed:      bool = False
+    refresh_attempts:    int = 0
 
     # خروجی
     reasoning_trace:     list[str] = field(default_factory=list)
@@ -63,6 +64,7 @@ class AgentState:
     # متا
     errors:              list[str] = field(default_factory=list)
     timings:             dict[str, float] = field(default_factory=dict)
+    metadata:            dict[str, Any] = field(default_factory=dict)
     created_at:          datetime = field(default_factory=datetime.utcnow)
     
     # Adaptive Orchestrator (جدید)

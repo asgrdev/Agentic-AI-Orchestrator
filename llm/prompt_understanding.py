@@ -892,6 +892,16 @@ class Phi4MiniClient:
                 step["tool"] = None
                 step["args"] = {}
 
+            # Every retrieval/search step must carry its own refined query,
+            # otherwise executors fall back to the raw user query and each
+            # tool ends up receiving a different message for the same step.
+            if (
+                step["action"] in {"retrieve", "search"}
+                or step["tool"] in {"retrieve", "search", "web_search"}
+            ):
+                if not step["args"].get("query") and step["description"]:
+                    step["args"]["query"] = step["description"]
+
             validated_steps.append(step)
 
         # اگر plan خالی بود، از sub_questions بساز
@@ -904,7 +914,7 @@ class Phi4MiniClient:
                         "description": sq,
                         "depends_on": [],
                         "tool": None,
-                        "args": {},
+                        "args": {"query": sq},
                     }
                 )
 
@@ -935,7 +945,7 @@ class Phi4MiniClient:
                 "description": sq,
                 "depends_on": [],
                 "tool": None,
-                "args": {},
+                "args": {"query": sq},
             }
             for i, sq in enumerate(understanding.get("sub_questions", []))
         ]

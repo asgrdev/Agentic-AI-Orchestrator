@@ -225,18 +225,19 @@ class ImprovedKnowledgeRefreshAgent:
         if not state.refresh_needed:
             return state
 
-        # بررسی throttle
+        # بررسی throttle — دانش به‌تازگی refresh شده، پس نیاز برطرف است؛
+        # اگر refresh_needed پاک نشود orchestrator در حلقه REFRESH گیر می‌کند
         now = time()
         elapsed = now - self._last_refresh.get(state.query, 0)
         if elapsed < self._refresh_interval:
-            logger.debug(
-                "Throttled refresh for '%s' (%.0fs remaining)",
+            logger.info(
+                "Throttled refresh for '%s' (%.0fs remaining) — treating as fresh",
                 state.query,
                 self._refresh_interval - elapsed
             )
+            state.refresh_needed = False
             return state
 
-        self._last_refresh[state.query] = now
         logger.info("Starting improved knowledge refresh for: '%s'", state.query)
 
         start_time = time()
@@ -276,6 +277,8 @@ class ImprovedKnowledgeRefreshAgent:
 
             state.refresh_needed = False
             state.metadata["last_refresh_metrics"] = metrics.to_dict()
+            # فقط بعد از موفقیت زمان را ثبت کن تا refresh ناموفق throttle نشود
+            self._last_refresh[state.query] = now
 
             logger.info(
                 "Knowledge refresh completed in %.2fs | items=%d chunks=%d",
@@ -286,8 +289,10 @@ class ImprovedKnowledgeRefreshAgent:
 
         except Exception as e:
             logger.error("Refresh failed: %s", e, exc_info=True)
-            state.current_step = FlowStep.ERROR
-            state.error = str(e)
+            # کنترل فلو با orchestrator است؛ فقط خطا را ثبت کن و
+            # refresh_needed را پاک کن تا حلقه‌ی retry بی‌پایان نشود
+            state.errors.append(f"refresh_failed: {e}")
+            state.refresh_needed = False
 
         return state
 

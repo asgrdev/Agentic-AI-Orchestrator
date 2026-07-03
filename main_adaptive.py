@@ -190,9 +190,12 @@ async def startAdaptiveOrchestrator(message, iface):
                         parts.append(out["summary"])
             if parts:
                 return "\n".join(parts)
-            return str(result)
-        else:
-            return str(result)
+
+        # هرگز state خام را به کاربر نشان نده
+        errs = "\n".join(f"- {e}" for e in getattr(result, "errors", [])) or "- (بدون جزئیات)"
+        step = getattr(result, "current_step", None)
+        step_name = step.value if step is not None else "?"
+        return f"پاسخی تولید نشد (مرحله: {step_name}).\nخطاها:\n{errs}"
             
     except Exception as e:
         import traceback
