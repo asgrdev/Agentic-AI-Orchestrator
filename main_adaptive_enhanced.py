@@ -1,6 +1,11 @@
-import gradio as gr
 from pathlib import Path
 import sys
+
+# logging باید قبل از import ماژول‌هایی که در import-time لاگ می‌زنند تنظیم شود
+from core.logger import setup_logging
+setup_logging()
+
+import gradio as gr
 from agents.adaptive_orchestrator import AdaptiveOrchestrator
 from configs.main_config import CONFIG
 from core.model_manager import get_model_manager, ModelConfig
@@ -242,6 +247,10 @@ def initialize_models():
 
 # راه‌اندازی مدل‌ها
 initialize_models()
+
+# اعمال حالت اجرای مدل‌ها (serial/concurrent) روی ModelGate
+from core.model_gate import configure_model_gate
+configure_model_gate(CONFIG.get("model_execution"))
 
 # ایجاد AdaptiveOrchestrator با تنظیمات
 GLOBAL_ADAPTIVE_ORCH = AdaptiveOrchestrator(CONFIG)

@@ -1,9 +1,15 @@
-import gradio as gr
 from pathlib import Path
 import sys
+
+# logging باید قبل از import ماژول‌هایی که در import-time لاگ می‌زنند تنظیم شود
+from core.logger import setup_logging
+setup_logging()
+
+import gradio as gr
 from agents.adaptive_orchestrator import AdaptiveOrchestrator
 from configs.main_config import CONFIG
 from core.model_manager import get_model_manager, ModelConfig
+from core.model_gate import configure_model_gate
 from core.memory_monitor import get_memory_monitor
 
 
@@ -162,6 +168,9 @@ def initialize_models():
 # راه‌اندازی مدل‌ها
 initialize_models()
 
+# اعمال حالت اجرای مدل‌ها (serial/concurrent) روی ModelGate
+configure_model_gate(CONFIG.get("model_execution"))
+
 # ایجاد AdaptiveOrchestrator با تنظیمات
 GLOBAL_ADAPTIVE_ORCH = AdaptiveOrchestrator(CONFIG)
 
@@ -203,7 +212,10 @@ async def startAdaptiveOrchestrator(message, iface):
         return f"خطا در AdaptiveOrchestrator: {str(e)}\n\nجزئیات:\n{error_details}"
 
 # ساخت رابط کاربری — چت + dashboard مدیریتی در یک Blocks
-from api.dashboard import build_dashboard_tabs
+try:
+    from api.dashboard import build_dashboard_tabs
+except ImportError:
+    build_dashboard_tabs = None
 
 with gr.Blocks(title="Agentic Graph RAG", fill_height=True, fill_width=True) as iface:
     with gr.Tabs():
@@ -216,9 +228,12 @@ with gr.Blocks(title="Agentic Graph RAG", fill_height=True, fill_width=True) as 
                 save_history=True,
                 fill_height=True,
             )
-        build_dashboard_tabs(GLOBAL_ADAPTIVE_ORCH)
+        if build_dashboard_tabs is not None:
+            build_dashboard_tabs(GLOBAL_ADAPTIVE_ORCH)
 
 if __name__ == "__main__":
+    from core.model_gate import get_model_gate
+
     print("\n" + "="*80)
     print("🚀 Starting Adaptive Agentic Graph RAG System")
     print("="*80)
@@ -228,7 +243,9 @@ if __name__ == "__main__":
     print("  ✅ 42 Skills Available")
     print("  ✅ Semantic Graph Integration")
     print("  ✅ Adaptive Flow Control")
+    print(f"  ⚙️ Model Execution Mode: {get_model_gate().mode}"
+          "  (MODEL_EXECUTION_MODE=serial|concurrent)")
     print("\n" + "="*80 + "\n")
-    
+
     iface.launch()
 

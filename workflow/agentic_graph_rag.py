@@ -139,7 +139,7 @@ class AgenticGraphRAGWorkflow:
         await self.kuzu.startup()
 
         # Weaviate connection
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._connect_weaviate)
 
         self._ready = True
@@ -149,7 +149,7 @@ class AgenticGraphRAGWorkflow:
         """بستن تمام اتصالات"""
         await self.kuzu.shutdown()
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._disconnect_weaviate)
 
         self._ready = False
@@ -200,7 +200,7 @@ class AgenticGraphRAGWorkflow:
         entity_ids: list[str] = []
 
         if embedding:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             search_results = await loop.run_in_executor(
                 None,
                 lambda: self.weaviate.graph_rag_search(
@@ -226,7 +226,7 @@ class AgenticGraphRAGWorkflow:
 
         # ── Step 3: Re-rank با Entity Boost ────────────────────────────
         if search_results and entity_weights:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             search_results = await loop.run_in_executor(
                 None,
                 lambda: self.weaviate.entity_boost(
@@ -288,7 +288,7 @@ class AgenticGraphRAGWorkflow:
             {"status": "ok", "chunk_id": ...}
         """
         collection_name = collection or self.config.collection_name
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         result = await loop.run_in_executor(
             None,
@@ -316,7 +316,7 @@ class AgenticGraphRAGWorkflow:
             {"inserted": N, "updated": M, "errors": K}
         """
         collection_name = collection or self.config.collection_name
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         result = await loop.run_in_executor(
             None,

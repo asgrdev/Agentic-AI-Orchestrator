@@ -320,7 +320,7 @@ class LLMReasoner:
         # ۲. Chain-of-Thought (در thread pool چون client.reason_step sync است)
         reasoning_steps: list[ReasoningStep] = []
         if self.use_cot:
-            reasoning_steps = await asyncio.get_event_loop().run_in_executor(
+            reasoning_steps = await asyncio.get_running_loop().run_in_executor(
                 None,
                 self._run_cot_sync,
                 query,
@@ -330,7 +330,7 @@ class LLMReasoner:
 
         # ۳. پاسخ نهایی
         reasoning_trace = self._format_trace(reasoning_steps)
-        raw_answer, confidence = await asyncio.get_event_loop().run_in_executor(
+        raw_answer, confidence = await asyncio.get_running_loop().run_in_executor(
             None,
             self._generate_answer_sync,
             query,

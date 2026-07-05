@@ -283,3 +283,64 @@ def cleanup():
 - ✅ مصرف حافظه 50-70% کاهش می‌یابد
 - ✅ سرعت اجرا بهبود می‌یابد (lazy loading)
 - ✅ کد تمیزتر و قابل نگهداری‌تر می‌شود
+---
+
+## ModelGate — حالت اجرای serial / concurrent (جدید)
+
+ریشه‌ی crash با پیام `[METAL] Insufficient Memory` این بود که کلاینت‌ها
+(phi3 برای understand، مدل embedding برای retrieve و granite برای answer)
+هرکدام مدل خودشان را **مستقیم** لود می‌کردند و همه هم‌زمان روی GPU می‌ماندند.
+
+حالا همه‌ی لودهای سنگین از `core/model_gate.py` عبور می‌کنند:
+
+```python
+from core.model_gate import get_model_gate
+
+gate = get_model_gate()
+model, tokenizer = gate.acquire(key="mlx:/path/to/model", kind="llm", loader=...)
+with gate.execution_slot("mlx:/path/to/model"):
+    out = generate(model, tokenizer, ...)
+```
+
+### دو حالت اجرا
+
+| حالت | رفتار | مناسب برای |
+|------|-------|------------|
+| `serial` (پیش‌فرض) | فقط یک مدل هم‌زمان در حافظه؛ قبل از لود مدل جدید بقیه آزاد می‌شوند و inference ها یکی‌یکی اجرا می‌شوند | Mac با RAM محدود — بدون OOM ولی هر تعویض مدل، لود مجدد از دیسک دارد |
+| `concurrent` | مدل‌ها بعد از لود در کش می‌مانند؛ inference موازی با سقف `max_concurrent_inferences` | ماشین‌هایی با RAM/VRAM کافی — سریع‌ترین حالت |
+
+### انتخاب حالت
+
+۱. متغیر محیطی (بالاترین اولویت):
+
+```bash
+MODEL_EXECUTION_MODE=concurrent python main_adaptive.py
+MODEL_MAX_CONCURRENT=3 MODEL_EXECUTION_MODE=concurrent python main_adaptive.py
+```
+
+۲. یا در `configs/main_config.py`:
+
+```python
+"model_execution": {
+    "mode": "serial",                # یا "concurrent"
+    "resident": ["embedding"],       # kind هایی که هرگز خودکار آزاد نمی‌شوند
+    "max_concurrent_inferences": 2,  # فقط در حالت concurrent
+    "log_memory": True,              # لاگ RSS/Metal دور هر لود/آزادسازی
+},
+```
+
+نکته: مدل embedding به‌صورت پیش‌فرض resident است (کوچک است و هر retrieve
+لازمش دارد). برای کمترین مصرف حافظه ممکن، `"resident": []` بگذارید تا در
+حالت serial واقعاً فقط یک مدل همزمان در حافظه بماند.
+
+### لاگ‌های gate
+
+هر لود/آزادسازی مدل با مصرف حافظه لاگ می‌شود:
+
+```
+📥 [gate] loading llm model | key=mlx:/models/phi3_mini | mode=serial
+✅ [gate] mlx:/models/phi3_mini loaded in 3.1s | RSS 2100→4650 MB (Δ+2550) | resident=['mlx:/models/phi3_mini']
+🗑️ [gate] evicted mlx:/models/phi3_mini | RSS 4650→2150 MB (Δ-2500)
+```
+
+تست‌ها: `python tests/test_model_gate.py`

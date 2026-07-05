@@ -81,8 +81,9 @@ class ModelManager:
                 raise ValueError(f"Model '{name}' not registered")
             
             # اگر مدل بارگذاری نشده، آن را بارگذاری کن
+            # (لاگ سطح debug — لود واقعی وزن‌ها را ModelGate با جزئیات حافظه لاگ می‌کند)
             if name not in self._models:
-                logger.info(f"🔄 Loading model: {name}")
+                logger.debug(f"🔄 Loading model client: {name}")
                 self._models[name] = self._load_model(name)
             
             self._usage_count[name] += 1
@@ -131,12 +132,12 @@ class ModelManager:
     
     def _load_reasoning_model(self, config: ModelConfig):
         """بارگذاری مدل reasoning"""
-        from llm.granite_client.mlx_client import MLXGraniteClient
-        
-        return MLXGraniteClient(
-            model_path=config.model_path,
-            backend="mlx"
-        )
+        # نام کلاس MlxGraniteClient است و فقط MlxGraniteConfig می‌پذیرد —
+        # import/امضای قبلی (MLXGraniteClient, backend=...) اصلاً وجود نداشت
+        from llm.granite_client.mlx_client import MlxGraniteClient
+        from llm.granite_client.config import MlxGraniteConfig
+
+        return MlxGraniteClient(MlxGraniteConfig(model_path=config.model_path))
     
     def unload_model(self, name: str) -> None:
         """آزادسازی یک مدل از حافظه"""
@@ -181,8 +182,11 @@ class ModelManager:
         
         try:
             import mlx.core as mx
-            # MLX memory cleanup
-            mx.metal.clear_cache()
+            # MLX memory cleanup — mx.metal.clear_cache در نسخه‌های جدید deprecated است
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+            else:
+                mx.metal.clear_cache()
         except (ImportError, AttributeError):
             pass
     

@@ -1,5 +1,6 @@
 # config.py
 from __future__ import annotations
+import os
 from typing import Callable, Any
 
 def _make_config() -> dict:
@@ -27,6 +28,20 @@ def _make_config() -> dict:
         "phi4_mini_factory":         make_phi4_client,
         "embed_client_factory":      make_embed_client,
         "context_builder_factory":   make_context_builder,
+
+        # ── Model Execution (serial/concurrent) ────────────────────
+        # serial:     فقط یک مدل سنگینِ غیر-resident هم‌زمان روی GPU + اجرای
+        #             سری inference ها (پیش‌فرض — جلوگیری از METAL OOM)
+        # concurrent: همه مدل‌ها در حافظه می‌مانند و موازی اجرا می‌شوند
+        # resident:   kind هایی که هرگز خودکار آزاد نمی‌شوند (embedding کوچک
+        #             است و هر retrieve لازمش دارد؛ لود مجددش صرفه ندارد)
+        # override با env: MODEL_EXECUTION_MODE=serial|concurrent
+        "model_execution": {
+            "mode": os.getenv("MODEL_EXECUTION_MODE", "serial"),
+            "resident": ["embedding"],
+            "max_concurrent_inferences": int(os.getenv("MODEL_MAX_CONCURRENT", "2")),
+            "log_memory": True,
+        },
 
         # ── بقیه configها بدون تغییر ─────────────────────────────
         "kuzu_path": "./data/kuzu_db",
@@ -83,6 +98,7 @@ def _make_config() -> dict:
         "chunk_size":           400,
         "refresh_interval":     60,     # ثانیه
         "max_concurrent":       5,
+        "embed_concurrency":    4,      # سقف embedding موازی در ingestion
 
         # ── DoclingProcessor ─────────────────────────────────────────
         "docling_ocr":          True,

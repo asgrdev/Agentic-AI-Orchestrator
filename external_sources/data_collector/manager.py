@@ -94,7 +94,7 @@ class DataCollectorManager:
     domain_filter: DataDomain | None = None,
     timeout_per_source: float = 30.0,  # ← اضافه شد
 ) -> dict[DataSource, CollectionResult]:
-        logger.info("search_all>>>>stated>>%s -- %s", query, sources)
+        logger.info("🔍 search_all started | query={!r} | sources={}", query, sources)
         if sources is None:
             sources = list(self._search_registry.keys())
     
@@ -162,7 +162,7 @@ class DataCollectorManager:
         max_results: int = 10
     ) -> list[CollectedItem]:
         """جمع‌آوری علمی از همه منابع"""
-        logger.info("collect_scientific>>>>stated>>%s",query)
+        logger.info("🔬 collect_scientific started | query={!r}", query)
 
         sources = [DataSource.ARXIV, DataSource.OPENALEX, DataSource.SEMANTIC_SCHOLAR]
         results = self.search_all(query, sources=sources, max_per_source=max_results)
@@ -174,7 +174,7 @@ class DataCollectorManager:
         max_results: int = 20
     ) -> list[CollectedItem]:
         """جمع‌آوری اجتماعی"""
-        logger.info("collect_social>>>>stated>>%s",query)
+        logger.info("💬 collect_social started | query={!r}", query)
 
         items = []
         try:
@@ -200,7 +200,7 @@ class DataCollectorManager:
         fred_series: list[str] | None = None,
     ) -> list[CollectedItem]:
         """جمع‌آوری مالی"""
-        logger.info("collect_financial>>>>stated>>%s",tickers)
+        logger.info("💹 collect_financial started | tickers={}", tickers)
 
         items = []
 
@@ -219,7 +219,7 @@ class DataCollectorManager:
         max_results: int = 5,
     ) -> list[CollectedItem]:
         """جمع‌آوری دانش عمومی (Wikipedia)"""
-        logger.info("collect_knowledge>>>>stated>>%s", query)
+        logger.info("📚 collect_knowledge started | query={!r}", query)
         try:
             result = self.knowledge.search_wikipedia(query, max_results=max_results)
             return result.items
@@ -270,7 +270,7 @@ class DataCollectorManager:
         max_per_feed: int = 5
     ) -> list[CollectedItem]:
         """اخبار سیاسی از RSS"""
-        logger.info("collect_political_news>>>>stated>>%s",query)
+        logger.info("📰 collect_political_news started | query={!r}", query)
         result = self.social.fetch_political_news(max_per_feed=max_per_feed)
         if query:
             return self._keyword_filter(result.items, query)

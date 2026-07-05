@@ -309,13 +309,13 @@ class MLXBackend(LLMBackend):
 
         self._generate = generate
 
-        # لود از طریق ModelGate — کش + کنترل serial/concurrent متمرکز
+        # لود lazy از طریق ModelGate — مدل در attribute نگه داشته نمی‌شود تا
+        # حالت serial بتواند آن را evict کند؛ هر chat() دوباره acquire می‌کند
+        # (اگر رزیدنت باشد فقط یک dict-lookup است)
         from core.model_gate import get_model_gate
-        self.model, self.tokenizer = get_model_gate().acquire(
-            key=f"mlx:{model_path}",
-            kind="llm",
-            loader=lambda: load(model_path),
-        )
+        self._gate = get_model_gate()
+        self._model_key = f"mlx:{model_path}"
+        self._model_loader = lambda: load(model_path)
         self._model_path = model_path
 
         # sampler یک‌بار ساخته می‌شود — overhead تکراری ندارد
@@ -395,18 +395,24 @@ class MLXBackend(LLMBackend):
         else:
             gen_kwargs = self._gen_kwargs
 
+        def _run_generation() -> str:
+            # slot + acquire داخل thread اجرا می‌شود تا event loop بلاک نشود؛
+            # acquire داخل slot است تا در حالت serial بین لود و اجرا، مدل
+            # دیگری نتواند لود شود
+            with self._gate.execution_slot(self._model_key):
+                model, tokenizer = self._gate.acquire(
+                    key=self._model_key, kind="llm", loader=self._model_loader
+                )
+                return self._generate(
+                    model,
+                    tokenizer,
+                    prompt=prompt,
+                    verbose=False,
+                    **gen_kwargs,
+                )
+
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: self._generate(
-                self.model,
-                self.tokenizer,
-                prompt=prompt,
-                verbose=False,
-                **gen_kwargs,
-            ),
-        )
-        return result
+        return await loop.run_in_executor(None, _run_generation)
 
 
 # ─────────────────────────────────────────────

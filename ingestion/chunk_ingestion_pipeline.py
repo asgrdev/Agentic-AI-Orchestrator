@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Callable, Optional
 
 from external_sources.data_collector.models import CollectedItem
@@ -31,6 +32,7 @@ class ChunkIngestionPipeline:
         entity_pipeline=None,    # EntityExtractionPipeline (اختیاری)
         relation_pipeline=None,  # RelationPipeline (اختیاری)
         chunk_size: int = 400,
+        embed_concurrency: int = 4,
     ):
         self._weaviate = weaviate
         self._kuzu = kuzu
@@ -39,6 +41,8 @@ class ChunkIngestionPipeline:
         self._relation_pipeline = relation_pipeline
         self._graph_builder = GraphBuilder(kuzu) if kuzu else None
         self._chunk_size = chunk_size
+        # قبلاً برای هر chunk یک thread هم‌زمان ساخته می‌شد (gather بدون سقف)
+        self._embed_sem = asyncio.Semaphore(max(1, embed_concurrency))
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -78,7 +82,12 @@ class ChunkIngestionPipeline:
     def _build_chunks(self, items: list[CollectedItem]) -> list[dict]:
         chunks = []
         for item in items:
-            for i, text in enumerate(DataHelper.chunk_text(item.content, self._chunk_size)):
+            item_chunks = DataHelper.chunk_text(item.content, self._chunk_size)
+            logger.debug(
+                "✂️ chunked '%s' | %d chars → %d chunks",
+                (item.title or item.id)[:60], len(item.content or ""), len(item_chunks),
+            )
+            for i, text in enumerate(item_chunks):
                 chunk_id = DataHelper.make_id(item.source, f"{item.id}_{i}")
                 chunks.append({
                     "id":       chunk_id,   # fix: EntityExtractionPipeline از "id" استفاده می‌کنه
@@ -97,10 +106,22 @@ class ChunkIngestionPipeline:
                     },
                     "entity_ids": [],
                 })
+        if items:
+            total_chars = sum(len(item.content or "") for item in items)
+            logger.info(
+                "✂️ Chunking done | items=%d | chunks=%d | total=%d chars | "
+                "avg=%d chars/chunk (chunk_size=%d)",
+                len(items), len(chunks), total_chars,
+                total_chars // max(1, len(chunks)), self._chunk_size,
+            )
         return chunks
 
     async def _ingest_chunks(self, chunks: list[dict]) -> None:
+        t_start = time.perf_counter()
+        logger.info("📦 Ingest pipeline started | chunks=%d", len(chunks))
+
         # ── 1. Entity extraction ───────────────────────────────────────
+        t0 = time.perf_counter()
         all_entities: list = []
         if self._entity_pipeline:
             try:
@@ -112,9 +133,15 @@ class ChunkIngestionPipeline:
                             chunk["entity_ids"].append(e.id)
             except Exception as ex:
                 logger.warning("Entity extraction failed, continuing: %s", ex)
+        logger.info(
+            "🏷️ Entity extraction | chunks=%d → entities=%d | %.1fs",
+            len(chunks), len(all_entities), time.perf_counter() - t0,
+        )
 
         # ── 2. Relation extraction ─────────────────────────────────────
+        t0 = time.perf_counter()
         chunk_relations: dict[str, list] = {}
+        relation_failures = 0
         if self._relation_pipeline and all_entities:
             # گروه‌بندی entities بر اساس chunk
             entity_map: dict[str, list] = {}
@@ -129,33 +156,72 @@ class ChunkIngestionPipeline:
                     relations = self._relation_pipeline.extract(chunk, chunk_ents)
                     chunk_relations[chunk["id"]] = relations
                 except Exception as ex:
+                    relation_failures += 1
                     logger.warning("Relation extraction failed for chunk %s: %s", chunk["id"], ex)
+            total_relations = sum(len(r) for r in chunk_relations.values())
+            logger.info(
+                "🔗 Relation extraction | relations=%d in %d chunks | failed=%d | %.1fs",
+                total_relations, len(chunk_relations), relation_failures,
+                time.perf_counter() - t0,
+            )
 
         # ── 3. Embed ───────────────────────────────────────────────────
-        await self._embed_chunks(chunks)
+        embedded_ok = await self._embed_chunks(chunks)
 
         # ── 4. Weaviate upsert ─────────────────────────────────────────
+        t0 = time.perf_counter()
         await self._weaviate.upsert_batch(items=chunks)
-
-        # ── 5. KuzuDB: Chunk nodes + Entity nodes + MENTIONS edges ─────
-        await self._upsert_graph(chunks, all_entities, chunk_relations)
-
         logger.info(
-            "Ingested %d chunks | %d entities | %d relation-sets → Weaviate + KuzuDB",
-            len(chunks), len(all_entities), len(chunk_relations),
+            "🗄️ Weaviate upsert | chunks=%d (embedded=%d) | %.1fs",
+            len(chunks), embedded_ok, time.perf_counter() - t0,
         )
 
-    async def _embed_chunks(self, chunks: list[dict]) -> None:
-        async def _one(chunk: dict) -> None:
-            try:
-                chunk["embedding"] = await asyncio.to_thread(
-                    self._embed_fn, chunk["content"]
-                )
-            except Exception as e:
-                logger.warning("Embed failed for chunk %s: %s", chunk["id"], e)
-                chunk["embedding"] = None
+        # ── 5. KuzuDB: Chunk nodes + Entity nodes + MENTIONS edges ─────
+        t0 = time.perf_counter()
+        await self._upsert_graph(chunks, all_entities, chunk_relations)
+        logger.info("🕸️ Graph upsert | %.1fs", time.perf_counter() - t0)
 
-        await asyncio.gather(*[_one(c) for c in chunks])
+        logger.info(
+            "✅ Ingest pipeline done | %d chunks | %d entities | %d relation-sets "
+            "→ Weaviate + KuzuDB | total %.1fs",
+            len(chunks), len(all_entities), len(chunk_relations),
+            time.perf_counter() - t_start,
+        )
+
+    async def _embed_chunks(self, chunks: list[dict]) -> int:
+        """برمی‌گرداند: تعداد chunk هایی که embedding موفق گرفتند"""
+        t0 = time.perf_counter()
+        done = 0
+
+        async def _one(chunk: dict) -> bool:
+            nonlocal done
+            async with self._embed_sem:
+                try:
+                    chunk["embedding"] = await asyncio.to_thread(
+                        self._embed_fn, chunk["content"]
+                    )
+                except Exception as e:
+                    logger.warning("Embed failed for chunk %s: %s", chunk["id"], e)
+                    chunk["embedding"] = None
+                    return False
+            done += 1
+            if done % 20 == 0:
+                logger.info("🔢 Embedding progress | %d/%d chunks", done, len(chunks))
+            return True
+
+        results = await asyncio.gather(*[_one(c) for c in chunks])
+        ok = sum(results)
+        failed = len(chunks) - ok
+        dim = 0
+        for c in chunks:
+            if c.get("embedding"):
+                dim = len(c["embedding"])
+                break
+        logger.info(
+            "🔢 Embedding stage | chunks=%d | ok=%d | failed=%d | dim=%d | %.1fs",
+            len(chunks), ok, failed, dim, time.perf_counter() - t0,
+        )
+        return ok
 
     async def _upsert_graph(
         self,

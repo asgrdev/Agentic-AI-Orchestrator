@@ -1,5 +1,4 @@
 import asyncio
-import gc
 import hashlib
 import logging
 import time
@@ -13,11 +12,10 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
 
+# نکته: تنظیم root logging (basicConfig) وظیفه‌ی entrypoint است
+# (core.logger.setup_logging)؛ ماژول کتابخانه‌ای نباید logging سراسری را
+# دستکاری کند — همین باعث دوبار چاپ‌شدن بعضی لاگ‌ها شده بود.
 logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -104,13 +102,34 @@ class Qwen3EmbeddingClient:
         self._cache: dict[str, list[float]] = {}
         self._executor = ThreadPoolExecutor(max_workers=2)
 
-        self.tokenizer, self.model = self._load_model()
-        self.embedding_dim = self._detect_embedding_dim()
+        # tokenizer سبک است و روی instance می‌ماند؛ وزن‌های مدل از طریق
+        # ModelGate مدیریت می‌شوند تا در حالت serial با LLM ها جابه‌جا شوند
+        from core.model_gate import get_model_gate
+        self._gate = get_model_gate()
+        self._gate_key = f"embed:{self.model_path}:{self.device}"
+
+        self.tokenizer = self._load_tokenizer()
+        model = self._gate.acquire(
+            key=self._gate_key,
+            kind="embedding",
+            loader=self._load_weights,
+        )
+        self.embedding_dim = self._detect_embedding_dim(model)
 
         logger.info(
             f"✅ مدل آماده | device={self.device} | "
             f"dim={self.embedding_dim} | pooling={pooling_mode}"
         )
+
+    @property
+    def model(self):
+        """وزن‌های مدل از gate — اگر evict شده باشد به‌صورت خودکار دوباره لود می‌شود"""
+        return self._gate.acquire(
+            key=self._gate_key,
+            kind="embedding",
+            loader=self._load_weights,
+        )
+
     async def __aenter__(self):
         return self
 
@@ -134,14 +153,15 @@ class Qwen3EmbeddingClient:
         logger.info("💻 اجرا روی CPU")
         return "cpu"
 
-    def _load_model(self):
-        """بارگذاری tokenizer و مدل با بهینه‌سازی‌های لازم"""
-        logger.info(f"📥 بارگذاری مدل از: {self.model_path}")
-
-        tokenizer = AutoTokenizer.from_pretrained(
+    def _load_tokenizer(self):
+        return AutoTokenizer.from_pretrained(
             self.model_path,
           #  trust_remote_code=True,
         )
+
+    def _load_weights(self):
+        """بارگذاری وزن‌های مدل با بهینه‌سازی‌های لازم (از طریق ModelGate صدا زده می‌شود)"""
+        logger.info(f"📥 بارگذاری مدل از: {self.model_path}")
 
         # تنظیمات بارگذاری بر اساس سخت‌افزار
         load_kwargs: dict = {
@@ -174,12 +194,12 @@ class Qwen3EmbeddingClient:
             model = model.to(self.device)
 
         model.eval()
-        return tokenizer, model
+        return model
 
-    def _detect_embedding_dim(self) -> int:
+    def _detect_embedding_dim(self, model) -> int:
         """تشخیص ابعاد embedding از مدل"""
         try:
-            return self.model.config.hidden_size
+            return model.config.hidden_size
         except AttributeError:
             # fallback: تست با یک متن کوچک
             with torch.no_grad():
@@ -188,7 +208,7 @@ class Qwen3EmbeddingClient:
                     return_tensors="pt",
                     padding=True,
                 ).to(self.device)
-                out = self.model(**enc)
+                out = model(**enc)
                 return out.last_hidden_state.shape[-1]
 
     # ──────────────────────────────────────────
@@ -257,8 +277,12 @@ class Qwen3EmbeddingClient:
         """اجرای forward pass و برگرداندن embeddings"""
         encoded = self._tokenize(texts)
 
-        with torch.no_grad():
-            output = self.model(**encoded)
+        # acquire داخل slot — در حالت serial هم‌زمان با generate یک LLM اجرا
+        # نمی‌شویم و بین لود و forward هم مدل دیگری نمی‌تواند لود شود
+        with self._gate.execution_slot(self._gate_key):
+            model = self.model
+            with torch.no_grad():
+                output = model(**encoded)
 
         embeddings = self._pool(
             output.last_hidden_state,
@@ -343,11 +367,16 @@ class Qwen3EmbeddingClient:
                 uncached_txt.append(text)
 
         # پردازش متن‌های بدون کش در batch‌ها
+        n_batches = -(-len(uncached_txt) // self.batch_size) if uncached_txt else 0
         new_embeddings: list[list[float]] = []
-        for i in range(0, len(uncached_txt), self.batch_size):
+        for b, i in enumerate(range(0, len(uncached_txt), self.batch_size), 1):
             chunk  = uncached_txt[i: i + self.batch_size]
             tensor = self._forward(chunk)
             new_embeddings.extend(tensor.tolist())
+            logger.debug(
+                "🔢 embedding batch %d/%d | texts=%d | done=%d/%d",
+                b, n_batches, len(chunk), len(new_embeddings), len(uncached_txt),
+            )
 
         # ذخیره در کش
         for idx_in_uncached, original_idx in enumerate(uncached_idx):
@@ -367,6 +396,13 @@ class Qwen3EmbeddingClient:
             all_embeddings.append(emb)
 
         total_ms = (time.perf_counter() - t_start) * 1000
+
+        logger.info(
+            "🔢 Embedding done | texts=%d | cache_hits=%d | computed=%d | "
+            "batches=%d | dim=%d | %.0fms (%.1fms/text)",
+            len(texts), len(cached_map), len(uncached_txt), n_batches,
+            self.embedding_dim, total_ms, total_ms / max(1, len(texts)),
+        )
 
         for text, emb in zip(texts, all_embeddings):
             results.append(
@@ -392,7 +428,7 @@ class Qwen3EmbeddingClient:
 
     async def async_embed_single(self, text: str) -> EmbeddingResult:
         """نسخه async از embed_single - مناسب برای FastAPI / asyncio"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor,
             self.embed_single,
@@ -403,7 +439,7 @@ class Qwen3EmbeddingClient:
         self, texts: list[str]
     ) -> BatchEmbeddingResult:
         """نسخه async از embed_batch"""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._executor,
             self.embed_batch,
@@ -502,28 +538,11 @@ class Qwen3EmbeddingClient:
         )
 
     def free_memory(self) -> None:
-        """آزاد کردن حافظه GPU"""
+        """آزاد کردن حافظه GPU (وزن‌ها از gate آزاد می‌شوند؛ استفاده بعدی دوباره لود می‌کند)"""
         try:
-            # پاک کردن کش
             self.clear_cache()
-            
-            # حذف مدل و tokenizer
-            if hasattr(self, 'model'):
-                del self.model
-            if hasattr(self, 'tokenizer'):
-                del self.tokenizer
-            
-            # پاکسازی حافظه GPU
-            if self.device == "cuda":
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            elif self.device == "mps":
-                torch.mps.empty_cache()
-            
-            # Python garbage collection
-            gc.collect()
-            
-            logger.info("🧹 حافظه آزاد شد")
+            self._gate.evict(self._gate_key)
+            logger.info("🧹 حافظه embedding آزاد شد")
         except Exception as e:
             logger.error(f"خطا در آزادسازی حافظه: {e}")
 

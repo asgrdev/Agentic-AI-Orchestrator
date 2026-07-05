@@ -2,7 +2,10 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 import json
+import logging
 import re
+
+logger = logging.getLogger(__name__)
 
 _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -30,25 +33,32 @@ class MlxGraniteAnswerGenerator:
         self._load = load
         self._generate = generate
         self._stream_generate = stream_generate
-        self.model, self.tokenizer = self._load(cfg.model_path)
-        
-        # Pre-compile the sampler based on config to avoid overhead
-        # Note: make_sampler requires specific arguments. 
-        # If you just want a simple argmax (greedy) with temp, you might need a custom lambda.
-        # However, standard make_sampler signature is: make_sampler(temp, top_p, min_p, min_tokens_to_keep, top_k, xtc...)
-        self._sampler = make_sampler(
-            temp=cfg.temperature,
-            top_p=cfg.top_p,
-            min_p=0.0, # Default
-            min_tokens_to_keep=1,
-            top_k=0,
-            xtc_probability=0.0,
-            xtc_threshold=0.0,
-            xtc_special_tokens=[] # You might need to handle this carefully
-        )
-        # NOTE: The above make_sampler call syntax might vary slightly by version.
-        # A safer, simpler fallback for custom generation is to use a lambda if make_sampler fails:
-        self._sampler = lambda logits: self._simple_sampler(logits, cfg.temperature, cfg.top_p)
+
+        # لود lazy از طریق ModelGate — قبلاً این کلاس granite را مستقیم لود
+        # می‌کرد و در کنار phi3 و embedding روی GPU می‌ماند → METAL OOM
+        from core.model_gate import get_model_gate
+        self._gate = get_model_gate()
+        self._model_key = f"mlx:{cfg.model_path}"
+        _path = cfg.model_path
+        self._model_loader = lambda: self._load(_path)
+
+        # make_sampler signature varies across mlx-lm versions; fall back to a
+        # simple argmax sampler only if it rejects these arguments
+        try:
+            self._sampler = make_sampler(
+                temp=cfg.temperature,
+                top_p=cfg.top_p,
+                min_p=0.0,
+                min_tokens_to_keep=1,
+                top_k=0,
+                xtc_probability=0.0,
+                xtc_threshold=0.0,
+                xtc_special_tokens=[],
+            )
+        except TypeError:
+            self._sampler = lambda logits: self._simple_sampler(
+                logits, cfg.temperature, cfg.top_p
+            )
 
     def _simple_sampler(self, logits, temperature, top_p):
         # Simple top-p sampling implementation if make_sampler is unavailable
@@ -99,21 +109,19 @@ class MlxGraniteAnswerGenerator:
         if self.cfg.seed is not None:
             mx.random.seed(self.cfg.seed)
 
-        # Pass ONLY the args that exist in generate_step
-        try:
-            # 'generate' in your code calls 'stream_generate' which passes kwargs to 'generate_step'
-            # You must use the 'generate' function or 'stream_generate', not call 'generate_step' directly
-            # if you want the standard behavior. 
-            # If you are calling the internal 'generate_step' directly, you must match its args exactly.
-            
-            # Assuming you call the public 'generate' function or 'stream_generate':
-            out = self._generate(self.model, self.tokenizer, prompt=full,
-                                 max_kv_size=2048  ,# محدود کردن سایز حافظه KV به 4096 (اختیاری)
-                                  **self._build_gen_kwargs())
-        except TypeError as e:
-            # Fallback: try without extra kwargs if sampler is the issue
-            print(f"Error>>>{e}")
-            out = self._generate(self.model, self.tokenizer, full)
+        # acquire داخل slot — در حالت serial بین لود و اجرا، مدل دیگری لود نمی‌شود
+        with self._gate.execution_slot(self._model_key):
+            model, tokenizer = self._gate.acquire(
+                key=self._model_key, kind="llm", loader=self._model_loader
+            )
+            try:
+                out = self._generate(model, tokenizer, prompt=full,
+                                     max_kv_size=2048,  # محدود کردن سایز حافظه KV
+                                     **self._build_gen_kwargs())
+            except TypeError as e:
+                # Fallback: try without extra kwargs if sampler is the issue
+                logger.warning("mlx_lm.generate rejected kwargs (%s) — retrying plain", e)
+                out = self._generate(model, tokenizer, full)
         return out
         #return self._process_output(out, full, sys, schema_hint)
 
@@ -126,11 +134,15 @@ class MlxGraniteAnswerGenerator:
         # Retry logic
         repair_prompt = "Fix the following into STRICT valid JSON matching the schema. Return ONLY JSON.\n\nTEXT:\n" + text
         repair_full = f"SYSTEM: {sys}\n\nUSER: {repair_prompt}\n\nASSISTANT:"
-        
-        try:
-            out2 = self._generate(self.model, self.tokenizer, repair_full, **self._build_gen_kwargs())
-        except TypeError:
-            out2 = self._generate(self.model, self.tokenizer, repair_full)
+
+        with self._gate.execution_slot(self._model_key):
+            model, tokenizer = self._gate.acquire(
+                key=self._model_key, kind="llm", loader=self._model_loader
+            )
+            try:
+                out2 = self._generate(model, tokenizer, repair_full, **self._build_gen_kwargs())
+            except TypeError:
+                out2 = self._generate(model, tokenizer, repair_full)
             
         text2 = str(out2.get("text", out2) if isinstance(out2, dict) else out2)
         js2 = self._parse_json(text2)

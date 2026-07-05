@@ -122,10 +122,13 @@ class MemoryMonitor:
         except ImportError:
             pass
         
-        # MLX cleanup
+        # MLX cleanup — mx.metal.clear_cache در نسخه‌های جدید deprecated است
         try:
             import mlx.core as mx
-            mx.metal.clear_cache()
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+            else:
+                mx.metal.clear_cache()
             logger.info("   MLX cache cleared")
         except (ImportError, AttributeError):
             pass

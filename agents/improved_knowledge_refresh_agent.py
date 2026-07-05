@@ -165,6 +165,7 @@ class ImprovedKnowledgeRefreshAgent:
             entity_pipeline=self._entity_pipeline,
             relation_pipeline=self._relation_pipeline,
             chunk_size=config.get("chunk_size", 400),
+            embed_concurrency=config.get("embed_concurrency", 4),
         )
 
         # تنظیمات
@@ -234,29 +235,33 @@ class ImprovedKnowledgeRefreshAgent:
         if not state.refresh_needed:
             return state
 
-        # بررسی throttle — کلید بر اساس topic تا عبارت‌بندی‌های مختلفِ یک
-        # موضوع، یک throttle مشترک داشته باشند
-        throttle_key = self._build_topic(state)
+        # topic یک‌بار محاسبه می‌شود (قبلاً هر بار _build_topic لاگ جدا می‌زد
+        # و همان پیام ۳ بار در لاگ تکرار می‌شد) — هم کلید throttle است هم
+        # query تمرکزشده برای collector ها
+        topic = self._build_topic(state)
         now = time()
-        elapsed = now - self._last_refresh.get(throttle_key, 0)
+        elapsed = now - self._last_refresh.get(topic, 0)
         if elapsed < self._refresh_interval:
             logger.info(
                 "Throttled refresh for '%s' (%.0fs remaining) — treating as fresh",
-                throttle_key,
+                topic,
                 self._refresh_interval - elapsed
             )
             state.refresh_needed = False
             return state
 
-        logger.info("Starting improved knowledge refresh for: '%s'", state.query)
+        logger.info(
+            "🔄 Knowledge refresh started | topic='%s' | query='%s'",
+            topic, state.query,
+        )
 
         start_time = time()
         metrics = RefreshMetrics()
 
         try:
             # ساخت task ها
-            tasks = self._build_tasks(state)
-            
+            tasks = self._build_tasks(state, topic)
+
             if not tasks:
                 logger.warning("No refresh tasks built for '%s'", state.query)
                 state.refresh_needed = False
@@ -288,7 +293,7 @@ class ImprovedKnowledgeRefreshAgent:
             state.refresh_needed = False
             state.metadata["last_refresh_metrics"] = metrics.to_dict()
             # فقط بعد از موفقیت زمان را ثبت کن تا refresh ناموفق throttle نشود
-            self._last_refresh[throttle_key] = now
+            self._last_refresh[topic] = now
 
             logger.info(
                 "Knowledge refresh completed in %.2fs | items=%d chunks=%d",
@@ -365,8 +370,8 @@ class ImprovedKnowledgeRefreshAgent:
     # Task Building
     # ══════════════════════════════════════════════════════════════
 
-    def _build_tasks(self, state: AgentState) -> list:
-        """ساخت task های بروزرسانی"""
+    def _build_tasks(self, state: AgentState, topic: str) -> list:
+        """ساخت task های بروزرسانی (topic تمرکزشده از refresh پاس داده می‌شود)"""
         tasks = []
 
         # استخراج ticker ها برای financial data
@@ -376,10 +381,6 @@ class ImprovedKnowledgeRefreshAgent:
                 self.data_manager.collect_financial,
                 tickers=tickers,
             ))
-
-        # موضوع تمرکز‌شده به‌جای query خام محاوره‌ای —
-        # collectors با «I need data about iran» چیزی پیدا نمی‌کنند
-        topic = self._build_topic(state)
 
         # domain-based collectors
         for domain in self._active_domains:
@@ -438,7 +439,7 @@ class ImprovedKnowledgeRefreshAgent:
         topic = " ".join(parts).strip()
         if not topic:
             topic = state.query
-        logger.info("Refresh topic: '%s' (from query: '%s')", topic, state.query)
+        logger.debug("Refresh topic: '%s' (from query: '%s')", topic, state.query)
         return topic
 
     # ══════════════════════════════════════════════════════════════

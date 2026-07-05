@@ -20,8 +20,6 @@ class MlxGraniteClient(BaseGraniteClient):
 
     def __init__(self, cfg: MlxGraniteConfig = MlxGraniteConfig()) -> None:
         self.cfg = cfg
-        self._model = None
-        self._tokenizer = None
         self._generate_fn = None
         self._load_model()
    
@@ -46,16 +44,16 @@ class MlxGraniteClient(BaseGraniteClient):
                 "MLX-LM not installed. Run: pip install mlx-lm"
             ) from e
 
-        # لود از طریق ModelGate — بدون gate هر REASON مدل را دوباره از دیسک
-        # لود می‌کرد و در حالت serial مدل‌های دیگر قبلش آزاد می‌شوند
+        # لود lazy از طریق ModelGate — بدون gate هر REASON مدل را دوباره از
+        # دیسک لود می‌کرد؛ مدل در attribute نگه داشته نمی‌شود تا حالت serial
+        # بتواند بین مدل‌ها جابه‌جا شود (acquire در هر _call_model)
         from core.model_gate import get_model_gate
-        self._model, self._tokenizer = get_model_gate().acquire(
-            key=f"mlx:{self.cfg.model_path}",
-            kind="llm",
-            loader=lambda: load(self.cfg.model_path),
-        )
+        self._gate = get_model_gate()
+        self._model_key = f"mlx:{self.cfg.model_path}"
+        _path = self.cfg.model_path
+        self._model_loader = lambda: load(_path)
         self._generate_fn = generate
-    
+
         # sampler یک‌بار ساخته می‌شود
         self._sampler = make_sampler(
             temp=self.cfg.temperature,
@@ -93,20 +91,25 @@ class MlxGraniteClient(BaseGraniteClient):
 
         kwargs = self._build_kwargs(max_tokens)
 
-        try:
-            out = self._generate_fn(
-                self._model,
-                self._tokenizer,
-                prompt=full_prompt,
-                **kwargs,
+        # acquire داخل slot — در حالت serial بین لود و اجرا، مدل دیگری لود نمی‌شود
+        with self._gate.execution_slot(self._model_key):
+            model, tokenizer = self._gate.acquire(
+                key=self._model_key, kind="llm", loader=self._model_loader
             )
-        except TypeError:
-            # fallback: بدون kwargs اضافی
-            out = self._generate_fn(
-                self._model,
-                self._tokenizer,
-                prompt=full_prompt,
-            )
+            try:
+                out = self._generate_fn(
+                    model,
+                    tokenizer,
+                    prompt=full_prompt,
+                    **kwargs,
+                )
+            except TypeError:
+                # fallback: بدون kwargs اضافی
+                out = self._generate_fn(
+                    model,
+                    tokenizer,
+                    prompt=full_prompt,
+                )
 
         # mlx_lm.generate ممکن است str یا dict برگرداند
         if isinstance(out, dict):

@@ -207,11 +207,10 @@ class KnowledgeRefreshAgent:
 
         # domain-based collectors
         for domain in self._active_domains:
-            logger.warning(">>>Domains> '%s' <-", domain)
             collector_name = _DOMAIN_COLLECTORS.get(domain)
             if not collector_name:
                 continue
-            logger.warning(">>>> '%s' -- '%s' <", collector_name, self.data_manager)
+            logger.debug("Refresh domain %s → collector '%s'", domain, collector_name)
             collector_fn = getattr(self.data_manager, collector_name, None)
             if collector_fn is None:
                 logger.warning("Collector '%s' not found on DataCollectorManager", collector_name)
@@ -227,12 +226,9 @@ class KnowledgeRefreshAgent:
     # ── Runner ─────────────────────────────────────────────────────────
 
     async def _run_refresh(self, fetch_fn, **kwargs) -> None:
-        logger.info("%s <<< _run_refresh", fetch_fn)
-        logger.info("%s <<< _run_refresh", self._sem)
         async with self._sem:
             try:
-                logger.info("%s <<< inThe_run_refresh",fetch_fn )
-                print(f"IN>>>>${kwargs}")
+                logger.debug("Refresh task %s(%s) started", fetch_fn.__name__, kwargs)
                 items = await asyncio.to_thread(fetch_fn, **kwargs)
                 if not items:
                     logger.debug("%s returned no items", fetch_fn.__name__)

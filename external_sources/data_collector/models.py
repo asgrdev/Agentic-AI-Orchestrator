@@ -1,7 +1,12 @@
-from pydantic import BaseModel, Field
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime, timezone
 from typing import Optional, Any
 from enum import Enum
+
+
+def _utcnow() -> datetime:
+    """جایگزین datetime.utcnow (که deprecated است) — خروجی timezone-aware"""
+    return datetime.now(timezone.utc)
 
 
 class DataDomain(str, Enum):
@@ -37,6 +42,8 @@ class DataSource(str, Enum):
 class CollectedItem(BaseModel):
     """مدل یکپارچه برای همه داده‌های جمع‌آوری شده"""
 
+    model_config = ConfigDict(use_enum_values=True)
+
     id:          str
     title:       Optional[str]       = None
     content:     str
@@ -46,14 +53,11 @@ class CollectedItem(BaseModel):
     url:         Optional[str]       = None
     author:      Optional[str]       = None
     published_at: Optional[datetime] = None
-    collected_at: datetime           = Field(default_factory=datetime.utcnow)
+    collected_at: datetime           = Field(default_factory=_utcnow)
     language:    str                 = "en"
     tags:        list[str]           = []
     metadata:    dict[str, Any]      = {}
     score:       Optional[float]     = None   # relevance score
-
-    class Config:
-        use_enum_values = True
 
 
 class CollectionResult(BaseModel):

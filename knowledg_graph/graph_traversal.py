@@ -72,9 +72,11 @@ class GraphTraversal:
             return GraphContext([], [], [], "")
 
         # Linking (async را در sync اجرا می‌کنیم)
-        linked = asyncio.get_event_loop().run_until_complete(
-            self.linker.link_entities(query_entities)
-        )
+        # run_sync به‌جای get_event_loop().run_until_complete —
+        # الگوی قبلی event loop می‌ساخت و نمی‌بست (ResourceWarning در لاگ)
+        from core.async_utils import run_sync
+
+        linked = run_sync(self.linker.link_entities(query_entities))
 
         entity_ids = [
             e.linked_id or e.id
@@ -85,18 +87,14 @@ class GraphTraversal:
             return GraphContext([], [], [], "")
 
         # Subgraph
-        subgraph = asyncio.get_event_loop().run_until_complete(
-            self.find_subgraph(entity_ids, max_hops=hops)
-        )
+        subgraph = run_sync(self.find_subgraph(entity_ids, max_hops=hops))
 
         nodes     = subgraph.get("nodes", [])
         edges     = subgraph.get("edges", [])
         unique    = {n["id"]: n for n in nodes}
 
         # Chunks
-        chunks = asyncio.get_event_loop().run_until_complete(
-            self._get_chunks_async(list(unique.values()))
-        )
+        chunks = run_sync(self._get_chunks_async(list(unique.values())))
 
         context_text = self._build_context(
             list(unique.values()), edges, chunks

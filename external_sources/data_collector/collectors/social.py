@@ -169,9 +169,16 @@ class SocialCollector:
             items=items,
             errors=errors,
             elapsed_sec=time.time() - start
-            
+
         )
-        logger.info(res)
+        # فقط خلاصه در INFO — دامپ کامل آیتم‌ها لاگ را غیرقابل خواندن می‌کرد
+        logger.info(
+            "📡 RSS fetched | feeds={} | items={} | errors={} | {:.1f}s",
+            len(feed_urls), res.total, len(res.errors), res.elapsed_sec,
+        )
+        if res.errors:
+            logger.warning("RSS errors: {}", res.errors)
+        logger.debug("RSS titles: {}", [i.title for i in items])
         return res
     # ─── RSS منابع خبری آماده ───────────────────────────────────────────
 
