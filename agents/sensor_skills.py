@@ -452,16 +452,17 @@ def get_sensor_skills_by_category(category: str) -> Dict[str, Dict[str, Any]]:
 def register_sensor_skills():
     """ثبت خودکار sensor skills در skill registry"""
     try:
-        from agents.skill_executor import SkillRegistry
-        
-        registry = SkillRegistry()
-        
+        from agents.skill_executor import get_global_registry
+
+        registry = get_global_registry()
+
         for skill_name, skill_info in SENSOR_SKILLS.items():
             registry.register_skill(
                 name=skill_name,
                 function=skill_info["function"],
                 description=skill_info["description"],
-                category=skill_info["category"]
+                category=skill_info["category"],
+                parameters=skill_info.get("parameters"),
             )
         
         logger.info(f"Registered {len(SENSOR_SKILLS)} sensor skills")

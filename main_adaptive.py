@@ -202,18 +202,21 @@ async def startAdaptiveOrchestrator(message, iface):
         error_details = traceback.format_exc()
         return f"خطا در AdaptiveOrchestrator: {str(e)}\n\nجزئیات:\n{error_details}"
 
-# ساخت رابط کاربری
-# نیازی به تعریف دستی inputs نیست چون Gradio خودش ورودی متن و فایل را مدیریت می‌کند
-iface = gr.ChatInterface(
-    fn=chatbot,
-    multimodal=True, # این گزینه باعث می‌شود فایل‌ها به صورت دیکشنری با کلید 'files' به تابع ارسال شوند
-    title="دستیار هوشمند تحلیل فایل (Adaptive Mode)",
-    description="فایل (PDF, TXT, CSV) آپلود کنید و دستور خود را بنویسید. این نسخه از AdaptiveOrchestrator با Query Classification و Dynamic Planning استفاده می‌کند.",
-    # نکته: در حالت multimodal=True، ورودی به صورت خودکار ترکیب می‌شود و در message دیکشنری شده می‌آید.
-    save_history=True,
-    fill_height=True,
-    fill_width=True,
-)
+# ساخت رابط کاربری — چت + dashboard مدیریتی در یک Blocks
+from api.dashboard import build_dashboard_tabs
+
+with gr.Blocks(title="Agentic Graph RAG", fill_height=True, fill_width=True) as iface:
+    with gr.Tabs():
+        with gr.Tab("💬 Chat"):
+            gr.ChatInterface(
+                fn=chatbot,
+                multimodal=True,  # فایل‌ها به صورت دیکشنری با کلید 'files' ارسال می‌شوند
+                title="دستیار هوشمند تحلیل فایل (Adaptive Mode)",
+                description="فایل (PDF, TXT, CSV) آپلود کنید و دستور خود را بنویسید. این نسخه از AdaptiveOrchestrator با Query Classification و Dynamic Planning استفاده می‌کند.",
+                save_history=True,
+                fill_height=True,
+            )
+        build_dashboard_tabs(GLOBAL_ADAPTIVE_ORCH)
 
 if __name__ == "__main__":
     print("\n" + "="*80)

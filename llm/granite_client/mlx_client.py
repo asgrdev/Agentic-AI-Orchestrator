@@ -45,8 +45,15 @@ class MlxGraniteClient(BaseGraniteClient):
             raise RuntimeError(
                 "MLX-LM not installed. Run: pip install mlx-lm"
             ) from e
-    
-        self._model, self._tokenizer = load(self.cfg.model_path)
+
+        # لود از طریق ModelGate — بدون gate هر REASON مدل را دوباره از دیسک
+        # لود می‌کرد و در حالت serial مدل‌های دیگر قبلش آزاد می‌شوند
+        from core.model_gate import get_model_gate
+        self._model, self._tokenizer = get_model_gate().acquire(
+            key=f"mlx:{self.cfg.model_path}",
+            kind="llm",
+            loader=lambda: load(self.cfg.model_path),
+        )
         self._generate_fn = generate
     
         # sampler یک‌بار ساخته می‌شود

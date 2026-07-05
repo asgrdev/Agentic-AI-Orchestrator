@@ -6,6 +6,7 @@ from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from typing import Callable
 import json
+import re
 import time
 
 from external_sources.data_collector.models import (
@@ -186,10 +187,8 @@ class DataCollectorManager:
             rss_result = self.social.fetch_rss(
                 self.social.POLITICAL_RSS[:3], max_per_feed=5
             )
-            # فیلتر بر اساس query
-            for item in rss_result.items:
-                if query.lower() in (item.title or "").lower():
-                    items.append(item)
+            # فیلتر کلیدواژه‌ای — تطبیق عبارت کامل تقریباً همیشه صفر می‌شود
+            items.extend(self._keyword_filter(rss_result.items, query))
         except Exception as e:
             logger.warning(f"RSS: {e}")
 
@@ -214,6 +213,57 @@ class DataCollectorManager:
 
         return items
 
+    def collect_knowledge(
+        self,
+        query: str,
+        max_results: int = 5,
+    ) -> list[CollectedItem]:
+        """جمع‌آوری دانش عمومی (Wikipedia)"""
+        logger.info("collect_knowledge>>>>stated>>%s", query)
+        try:
+            result = self.knowledge.search_wikipedia(query, max_results=max_results)
+            return result.items
+        except Exception as e:
+            logger.warning(f"Wikipedia: {e}")
+            return []
+
+    # کلمات بی‌اثر که نباید مبنای فیلتر خبر باشند
+    _FILTER_STOPWORDS = {
+        "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for",
+        "i", "need", "want", "data", "about", "latest", "recent", "news",
+        "information", "info", "please", "give", "me", "what", "is", "are",
+        "tell", "show", "find", "get", "current", "update", "updates",
+    }
+
+    def _keyword_filter(
+        self,
+        items: list[CollectedItem],
+        query: str,
+    ) -> list[CollectedItem]:
+        """
+        فیلتر آیتم‌ها بر اساس کلیدواژه‌های معنادار query.
+        تطبیق عبارت کامل، queryهای محاوره‌ای را صفر می‌کند
+        («I need data about iran» هیچ تیتری را match نمی‌کند).
+        """
+        keywords = [
+            w for w in re.findall(r"[\w؀-ۿ]+", query.lower())
+            if len(w) > 2 and w not in self._FILTER_STOPWORDS
+        ]
+        if not keywords:
+            return items
+
+        matched = [
+            item for item in items
+            if any(
+                kw in (item.title or "").lower() or kw in (item.content or "").lower()
+                for kw in keywords
+            )
+        ]
+        logger.info(
+            f"keyword filter: {len(matched)}/{len(items)} items matched keywords {keywords}"
+        )
+        return matched
+
     def collect_political_news(
         self,
         query: str | None = None,
@@ -223,11 +273,7 @@ class DataCollectorManager:
         logger.info("collect_political_news>>>>stated>>%s",query)
         result = self.social.fetch_political_news(max_per_feed=max_per_feed)
         if query:
-            return [
-                item for item in result.items
-                if query.lower() in (item.title or "").lower() or
-                   query.lower() in item.content.lower()
-            ]
+            return self._keyword_filter(result.items, query)
         return result.items
 
     # ─── Pipeline یکپارچه ────────────────────────────────────────────────

@@ -69,7 +69,21 @@ class AdaptiveOrchestrator:
         # Agents
         self.retriever = RetrieverAgent(config)
         self.validator = ValidatorAgent(config)
-        self.refresher = ImprovedKnowledgeRefreshAgent(config)
+
+        # refresher از همان connection های retriever استفاده می‌کند —
+        # دو AsyncKuzuManager/WeaviateStore جدا یعنی دوبرابر حافظه و thread pool
+        refresher_config = {
+            **config,
+            "shared_kuzu": self.retriever._kuzu,
+            "shared_weaviate": self.retriever._weaviate,
+        }
+        self.refresher = ImprovedKnowledgeRefreshAgent(refresher_config)
+
+        # جایگزینی skill های stub با پیاده‌سازی واقعی (vector/graph/web)
+        self._register_real_skills()
+
+        # آمار اجرای فلو برای dashboard
+        self.flow_history: list[dict] = []
         
         # نگاشت انتقال‌های مجاز (برای validation)
         self._transitions: dict[FlowStep, list[FlowStep]] = {
@@ -85,9 +99,116 @@ class AdaptiveOrchestrator:
         }
     
     # ══════════════════════════════════════════════════════════════
+    # Real Skill Wiring
+    # ══════════════════════════════════════════════════════════════
+
+    def _register_real_skills(self) -> None:
+        """
+        skill های پیش‌فرض registry همه stub هستند و [] برمی‌گردانند —
+        اینجا با backend های واقعی (Weaviate/KuzuDB/DataCollector) جایگزین می‌شوند.
+        """
+        registry = self.skill_executor.registry
+        orch = self
+
+        async def real_search(query: str, sources: list = None, top_k: int = 5) -> dict:
+            """جستجوی واقعی: hybrid vector + graph"""
+            sources = sources or ["vector", "graph"]
+            results: list[dict] = []
+            try:
+                if not orch.retriever._ready:
+                    await orch.retriever.startup()
+
+                if "vector" in sources:
+                    embedding = await orch.retriever._embed(query)
+                    hits = await orch.retriever._weaviate.hybrid_search(
+                        query_text=query,
+                        query_embedding=embedding,
+                        top_k=top_k,
+                    )
+                    for h in hits:
+                        results.append({
+                            "source": "vector",
+                            "content": getattr(h, "content", ""),
+                            "score": getattr(h, "score", 0.0),
+                            "chunk_id": getattr(h, "chunk_id", ""),
+                        })
+
+                if "graph" in sources:
+                    res = await orch.retriever._kuzu.find_entity_by_name(query, limit=top_k)
+                    for row in (res.rows if res else []):
+                        results.append({"source": "graph", **dict(row)})
+            except Exception as e:
+                logger.warning("real_search failed: %s", e)
+                return {"query": query, "sources": sources, "results": results, "error": str(e)}
+            return {"query": query, "sources": sources, "results": results}
+
+        async def real_retrieve(query: str, top_k: int = 5) -> dict:
+            """بازیابی واقعی از vector store"""
+            out = await real_search(query, sources=["vector"], top_k=top_k)
+            return {"query": query, "top_k": top_k, "chunks": out["results"]}
+
+        async def real_graph_query(cypher: str) -> dict:
+            """اجرای Cypher واقعی روی KuzuDB"""
+            try:
+                if not orch.retriever._ready:
+                    await orch.retriever.startup()
+                res = await orch.retriever._kuzu.execute(cypher)
+                return {"cypher": cypher, "results": list(res.rows) if res else []}
+            except Exception as e:
+                logger.warning("graph_query failed: %s", e)
+                return {"cypher": cypher, "results": [], "error": str(e)}
+
+        async def real_web_search(query: str, num_results: int = 5) -> dict:
+            """جستجوی منابع خارجی (Wikipedia/arXiv/RSS) از طریق DataCollectorManager"""
+            import asyncio as _asyncio
+            try:
+                items = await _asyncio.wait_for(
+                    _asyncio.to_thread(
+                        orch.refresher.data_manager.collect_knowledge,
+                        query, num_results,
+                    ),
+                    timeout=30.0,
+                )
+                results = [
+                    {
+                        "title": it.title,
+                        "content": (it.content or "")[:500],
+                        "url": it.url,
+                        "source": it.source,
+                    }
+                    for it in items[:num_results]
+                ]
+                return {"query": query, "num_results": num_results, "results": results}
+            except Exception as e:
+                logger.warning("web_search failed: %s", e)
+                return {"query": query, "num_results": num_results, "results": [], "error": str(e)}
+
+        registry.register(
+            "search", real_search,
+            "Search across vector store and knowledge graph (real backends)",
+            {"query": "string", "sources": "list[string]", "top_k": "int"},
+        )
+        registry.register(
+            "retrieve", real_retrieve,
+            "Retrieve relevant chunks from the vector store (real backend)",
+            {"query": "string", "top_k": "int"},
+        )
+        registry.register(
+            "graph_query", real_graph_query,
+            "Run a Cypher query against KuzuDB (real backend)",
+            {"cypher": "string"},
+        )
+        registry.register(
+            "web_search", real_web_search,
+            "Search external sources (Wikipedia, arXiv, RSS) for fresh information",
+            {"query": "string", "num_results": "int"},
+        )
+        logger.info("Real skills registered: search, retrieve, graph_query, web_search")
+
+    # ══════════════════════════════════════════════════════════════
     # Main Entry Point
     # ══════════════════════════════════════════════════════════════
-    
+
     async def run(self, query: str, session_id: str) -> AgentState:
         """
         اجرای adaptive با کنترل داینامیک
@@ -121,8 +242,37 @@ class AdaptiveOrchestrator:
                 f"(مرحله: {state.current_step.value} | خطا: {last_error})"
             )
 
+        # ثبت در تاریخچه فلو (برای dashboard)
+        self._record_flow(state)
+
         logger.info(f"Query completed: {state.current_step} | confidence: {state.confidence:.2f}")
         return state
+
+    def _record_flow(self, state: AgentState) -> None:
+        """ثبت خلاصه اجرای یک query برای dashboard"""
+        try:
+            analysis = state.query_analysis
+            self.flow_history.append({
+                "timestamp": time.time(),
+                "query": state.query[:200],
+                "session_id": state.session_id,
+                "query_type": analysis.query_type.value if analysis else "unknown",
+                "complexity": analysis.complexity.value if analysis else "unknown",
+                "strategy": getattr(analysis, "suggested_strategy", "") if analysis else "",
+                "final_step": state.current_step.value,
+                "confidence": state.confidence,
+                "iterations": state.iteration,
+                "refresh_attempts": state.refresh_attempts,
+                "chunks_retrieved": len(state.retrieval.vector_chunks) if state.retrieval else 0,
+                "graph_nodes": len(state.retrieval.graph_nodes) if state.retrieval else 0,
+                "timings": dict(state.timings),
+                "errors": list(state.errors),
+                "answered": bool(state.final_answer) and state.current_step == FlowStep.ANSWER,
+            })
+            if len(self.flow_history) > 200:
+                self.flow_history.pop(0)
+        except Exception as e:
+            logger.debug("flow history record failed: %s", e)
     
     # ══════════════════════════════════════════════════════════════
     # UNDERSTAND + Analysis
@@ -390,9 +540,19 @@ class AdaptiveOrchestrator:
             next_step = FlowStep.ERROR
         finally:
             gc.collect()
-        
+            self._release_gpu_cache()
+
         state.timings[step.value] = time.perf_counter() - t0
         return next_step
+
+    @staticmethod
+    def _release_gpu_cache() -> None:
+        """آزادسازی کش Metal بین step ها — جلوگیری از OOM وقتی چند مدل MLX لود می‌شوند"""
+        try:
+            import mlx.core as mx
+            mx.clear_cache()
+        except Exception:
+            pass
     # ══════════════════════════════════════════════════════════════
     # Tool/Skill Call Execution
     # ══════════════════════════════════════════════════════════════

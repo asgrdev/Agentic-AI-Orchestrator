@@ -104,28 +104,36 @@ class ImprovedKnowledgeRefreshAgent:
             "data_manager", DataCollectorManager()
         )
 
-        # KuzuDB & Weaviate
-        self._kuzu = AsyncKuzuManager(config["kuzu_path"])
-        
-        wv = config.get("weaviate", {})
-        vector_dim = config.get("vector_dim", 1536)
-        if self._use_model_manager and self._embed_wrapper:
-            # گرفتن dimension از model wrapper
-            with self._embed_wrapper.use_model() as model:
-                vector_dim = model.embedding_dim
-        elif self._embed_client:
-            vector_dim = self._embed_client.embedding_dim
-            
-        self._weaviate = WeaviateStore(
-            collection_name=config.get("collection_name", "Chunks"),
-            mode=wv.get("mode", "docker"),
-            host=wv.get("host", "localhost"),
-            port=wv.get("port", 8080),
-            grpc_port=wv.get("grpc_port", 50051),
-            cloud_url=wv.get("cloud_url", ""),
-            api_key=wv.get("api_key", ""),
-            vector_dim=vector_dim,
-        )
+        # KuzuDB & Weaviate — در صورت وجود، از نمونه مشترک استفاده کن
+        # (هر agent با connection مستقل = مصرف حافظه/thread دوبرابر)
+        shared_kuzu = config.get("shared_kuzu")
+        shared_weaviate = config.get("shared_weaviate")
+
+        self._owns_stores = shared_kuzu is None and shared_weaviate is None
+        self._kuzu = shared_kuzu or AsyncKuzuManager(config["kuzu_path"])
+
+        if shared_weaviate is not None:
+            self._weaviate = shared_weaviate
+        else:
+            wv = config.get("weaviate", {})
+            vector_dim = config.get("vector_dim", 1536)
+            if self._use_model_manager and self._embed_wrapper:
+                # گرفتن dimension از model wrapper
+                with self._embed_wrapper.use_model() as model:
+                    vector_dim = model.embedding_dim
+            elif self._embed_client:
+                vector_dim = self._embed_client.embedding_dim
+
+            self._weaviate = WeaviateStore(
+                collection_name=config.get("collection_name", "Chunks"),
+                mode=wv.get("mode", "docker"),
+                host=wv.get("host", "localhost"),
+                port=wv.get("port", 8080),
+                grpc_port=wv.get("grpc_port", 50051),
+                cloud_url=wv.get("cloud_url", ""),
+                api_key=wv.get("api_key", ""),
+                vector_dim=vector_dim,
+            )
 
         # Semantic Graph Builder
         self._semantic_builder = SemanticGraphBuilder(
@@ -184,9 +192,10 @@ class ImprovedKnowledgeRefreshAgent:
         logger.info("ImprovedKnowledgeRefreshAgent ready")
 
     async def shutdown(self) -> None:
-        """خاموش کردن agent"""
-        await self._kuzu.__aexit__(None, None, None)
-        await self._weaviate.close()
+        """خاموش کردن agent — فقط store هایی که خودش ساخته را می‌بندد"""
+        if self._owns_stores:
+            await self._kuzu.__aexit__(None, None, None)
+            await self._weaviate.close()
         self._ready = False
 
     # ══════════════════════════════════════════════════════════════
@@ -225,14 +234,15 @@ class ImprovedKnowledgeRefreshAgent:
         if not state.refresh_needed:
             return state
 
-        # بررسی throttle — دانش به‌تازگی refresh شده، پس نیاز برطرف است؛
-        # اگر refresh_needed پاک نشود orchestrator در حلقه REFRESH گیر می‌کند
+        # بررسی throttle — کلید بر اساس topic تا عبارت‌بندی‌های مختلفِ یک
+        # موضوع، یک throttle مشترک داشته باشند
+        throttle_key = self._build_topic(state)
         now = time()
-        elapsed = now - self._last_refresh.get(state.query, 0)
+        elapsed = now - self._last_refresh.get(throttle_key, 0)
         if elapsed < self._refresh_interval:
             logger.info(
                 "Throttled refresh for '%s' (%.0fs remaining) — treating as fresh",
-                state.query,
+                throttle_key,
                 self._refresh_interval - elapsed
             )
             state.refresh_needed = False
@@ -278,7 +288,7 @@ class ImprovedKnowledgeRefreshAgent:
             state.refresh_needed = False
             state.metadata["last_refresh_metrics"] = metrics.to_dict()
             # فقط بعد از موفقیت زمان را ثبت کن تا refresh ناموفق throttle نشود
-            self._last_refresh[state.query] = now
+            self._last_refresh[throttle_key] = now
 
             logger.info(
                 "Knowledge refresh completed in %.2fs | items=%d chunks=%d",
@@ -358,7 +368,7 @@ class ImprovedKnowledgeRefreshAgent:
     def _build_tasks(self, state: AgentState) -> list:
         """ساخت task های بروزرسانی"""
         tasks = []
-        
+
         # استخراج ticker ها برای financial data
         tickers = self._extract_tickers(state.query)
         if tickers:
@@ -367,12 +377,16 @@ class ImprovedKnowledgeRefreshAgent:
                 tickers=tickers,
             ))
 
+        # موضوع تمرکز‌شده به‌جای query خام محاوره‌ای —
+        # collectors با «I need data about iran» چیزی پیدا نمی‌کنند
+        topic = self._build_topic(state)
+
         # domain-based collectors
         for domain in self._active_domains:
             collector_name = _DOMAIN_COLLECTORS.get(domain)
             if not collector_name:
                 continue
-            
+
             collector_fn = getattr(self.data_manager, collector_name, None)
             if collector_fn is None:
                 logger.warning(
@@ -383,10 +397,49 @@ class ImprovedKnowledgeRefreshAgent:
 
             tasks.append(self._run_refresh(
                 collector_fn,
-                query=state.query,
+                query=topic,
             ))
 
         return tasks
+
+    _TOPIC_STOPWORDS = {
+        "the", "a", "an", "and", "or", "of", "in", "on", "at", "to", "for",
+        "i", "need", "want", "data", "about", "latest", "recent", "news",
+        "information", "info", "please", "give", "me", "what", "is", "are",
+        "tell", "show", "find", "get", "current", "update", "updates",
+    }
+
+    def _build_topic(self, state: AgentState) -> str:
+        """
+        موضوع جستجو از entities استخراج‌شده + کلیدواژه‌های معنادار.
+        هر tool باید پیام مخصوص خودش را بگیرد، نه query خام کاربر.
+        """
+        parts: list[str] = []
+        seen: set[str] = set()
+
+        for ent in state.extracted_entities or []:
+            text = (ent.get("text") or ent.get("name") or "").strip()
+            if text and text.lower() not in seen:
+                seen.add(text.lower())
+                parts.append(text)
+
+        analysis = getattr(state, "query_analysis", None)
+        for kw in (getattr(analysis, "keywords", None) or []):
+            kw_l = kw.lower().strip()
+            if (
+                kw_l
+                and len(kw_l) > 2
+                and kw_l not in self._TOPIC_STOPWORDS
+                and kw_l not in seen
+            ):
+                seen.add(kw_l)
+                parts.append(kw)
+
+        topic = " ".join(parts).strip()
+        if not topic:
+            topic = state.query
+        logger.info("Refresh topic: '%s' (from query: '%s')", topic, state.query)
+        return topic
 
     # ══════════════════════════════════════════════════════════════
     # Task Runner

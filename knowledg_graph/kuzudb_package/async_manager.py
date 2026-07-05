@@ -40,14 +40,20 @@ class AsyncKuzuManager:
         )
 
     async def __aenter__(self) -> "AsyncKuzuManager":
+        # idempotent — نمونه مشترک بین چند agent ممکن است دوبار startup شود
+        if self._manager is not None:
+            return self
         await self._run(self._client.connect)
         self._manager = KuzuManager(self._client)
         await self._run(self._manager.setup_schema)
         return self
 
     async def __aexit__(self, *_) -> None:
+        if self._manager is None:
+            return
         await self._run(self._client.disconnect)
         self._executor.shutdown(wait=True)
+        self._manager = None
 
     # ── اجرای sync در thread pool ─────────────
 

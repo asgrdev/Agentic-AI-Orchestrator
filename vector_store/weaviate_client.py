@@ -293,6 +293,9 @@ class WeaviateStore:
     # ── Lifecycle ──────────────────────────────
 
     async def connect(self) -> None:
+        # idempotent — نمونه مشترک بین چند agent ممکن است دوبار connect شود
+        if self._client is not None:
+            return
         self._client = WeaviateConnectionFactory.create(
             mode=self.mode,
             host=self.host,

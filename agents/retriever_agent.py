@@ -93,7 +93,7 @@ class RetrieverAgent:
             self._embed(state.query),
             self._build_entity_weights(state),
         )
-        state.iteration += 1
+        # iteration را orchestrator مدیریت می‌کند (شمارش چرخه، نه شمارش retrieve)
 
         # vector search با entity weights آماده
         search_results = await self._weaviate.graph_rag_search(
@@ -164,9 +164,9 @@ class RetrieverAgent:
         """
         weights: dict[str, float] = {}
 
-        # منبع 1: phi4 extracted entities
+        # منبع 1: phi4 extracted entities — planner کلید "text" می‌دهد
         for i, entity in enumerate(state.extracted_entities):
-            eid = entity.get("id") or entity.get("name", "")
+            eid = entity.get("id") or entity.get("name") or entity.get("text", "")
             if eid:
                 # decay از 1.0 به 0.5
                 weights[eid] = max(1.0 - i * 0.1, 0.5)

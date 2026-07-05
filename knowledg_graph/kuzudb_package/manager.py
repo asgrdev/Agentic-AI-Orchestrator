@@ -89,9 +89,17 @@ class KuzuManager:
                     ColumnDef("id", "STRING", primary=True),
                     ColumnDef("name", "STRING"),
                     ColumnDef("label", "STRING"),
+                    ColumnDef("type", "STRING"),
+                    ColumnDef("canonical_name", "STRING"),
                     ColumnDef("description", "STRING"),
                     ColumnDef("source", "STRING"),
+                    ColumnDef("kb_url", "STRING"),
+                    ColumnDef("confidence", "DOUBLE"),
+                    ColumnDef("version", "INT64"),
+                    ColumnDef("previous_names", "STRING"),
                     ColumnDef("created_at", "STRING"),
+                    ColumnDef("last_updated", "STRING"),
+                    ColumnDef("last_seen_chunk", "STRING"),
                     ColumnDef("embedding", "DOUBLE[]"),
                 ],
                 primary_key="id"
@@ -130,7 +138,14 @@ class KuzuManager:
                 to_table="Entity",
                 properties=[
                     ColumnDef("relation_type", "STRING"),
+                    ColumnDef("rel_type", "STRING"),
                     ColumnDef("weight", "DOUBLE"),
+                    ColumnDef("confidence", "DOUBLE"),
+                    ColumnDef("version", "INT64"),
+                    ColumnDef("source_doc", "STRING"),
+                    ColumnDef("source_chunk", "STRING"),
+                    ColumnDef("evidence", "STRING"),
+                    ColumnDef("timestamp", "STRING"),
                     ColumnDef("created_at", "STRING"),
                 ],
             ),
@@ -160,25 +175,34 @@ class KuzuManager:
 
     # ── Entity UPSERT ─────────────────────────
 
-    def upsert_entity(self, node: GraphNode) -> QueryResult:
+    def upsert_entity(self, node: Any) -> QueryResult:
         """
         رفع Race Condition:
         به جای MATCH + CREATE جداگانه، از MERGE اتمی استفاده می‌شود.
-        MERGE در یک عملیات اتمی چک می‌کند و اگر نبود می‌سازد.
+
+        هر دو شکل GraphNode را می‌پذیرد (duck-typing):
+        - manager.GraphNode  (label + properties dict)
+        - models.GraphNode   (type/canonical_name/description/kb_url/confidence)
         """
         now = datetime.utcnow().isoformat()
+        node_props = getattr(node, "properties", None) or {}
+        label = getattr(node, "label", "") or getattr(node, "type", "") or ""
         props = {
             "id": node.id,
             "name": node.name,
-            "label": node.label,
-            "description": node.properties.get("description", ""),
-            "source": node.properties.get("source", ""),
+            "label": label,
+            "type": getattr(node, "type", "") or label,
+            "canonical_name": getattr(node, "canonical_name", "") or node.name,
+            "description": getattr(node, "description", "") or node_props.get("description", ""),
+            "source": node_props.get("source", ""),
+            "kb_url": getattr(node, "kb_url", "") or node_props.get("url", ""),
+            "confidence": float(getattr(node, "confidence", 1.0) or 1.0),
             "created_at": now,
         }
 
         # embedding جداگانه handle می‌شود (ممکن است None باشد)
         embedding_part = ""
-        if node.embedding is not None:
+        if getattr(node, "embedding", None) is not None:
             props["embedding"] = node.embedding
             embedding_part = ", e.embedding = $embedding"
 
@@ -187,38 +211,62 @@ class KuzuManager:
             ON CREATE SET
                 e.name = $name,
                 e.label = $label,
+                e.type = $type,
+                e.canonical_name = $canonical_name,
                 e.description = $description,
                 e.source = $source,
+                e.kb_url = $kb_url,
+                e.confidence = $confidence,
+                e.version = 1,
                 e.created_at = $created_at
                 {embedding_part}
             ON MATCH SET
                 e.name = $name,
                 e.label = $label,
-                e.description = $description
+                e.type = $type,
+                e.description = $description,
+                e.last_updated = $created_at
                 {embedding_part}
         """
         return self.client.execute(query, props)
 
-    def upsert_relation(self, edge: GraphEdge) -> QueryResult:
+    def upsert_relation(self, edge: Any) -> QueryResult:
         """
         MERGE اتمی برای رابطه.
         اگر رابطه وجود داشت weight جمع می‌شود.
+
+        هر دو شکل GraphEdge را می‌پذیرد:
+        - manager.GraphEdge (source_id/target_id/relation_type)
+        - models.GraphEdge  (from_id/to_id/rel_type + confidence/source_doc/source_chunk)
         """
         now = datetime.utcnow().isoformat()
+        source_id = getattr(edge, "source_id", None) or getattr(edge, "from_id", "")
+        target_id = getattr(edge, "target_id", None) or getattr(edge, "to_id", "")
+        rel_type = getattr(edge, "relation_type", None) or getattr(edge, "rel_type", "RELATED")
         query = """
             MATCH (a:Entity {id: $source_id}), (b:Entity {id: $target_id})
             MERGE (a)-[r:RELATION {relation_type: $relation_type}]->(b)
             ON CREATE SET
+                r.rel_type = $relation_type,
                 r.weight = $weight,
+                r.confidence = $confidence,
+                r.version = 1,
+                r.source_doc = $source_doc,
+                r.source_chunk = $source_chunk,
+                r.timestamp = $created_at,
                 r.created_at = $created_at
             ON MATCH SET
-                r.weight = r.weight + $weight
+                r.weight = r.weight + $weight,
+                r.timestamp = $created_at
         """
         return self.client.execute(query, {
-            "source_id": edge.source_id,
-            "target_id": edge.target_id,
-            "relation_type": edge.relation_type,
-            "weight": edge.weight,
+            "source_id": source_id,
+            "target_id": target_id,
+            "relation_type": rel_type,
+            "weight": float(getattr(edge, "weight", 1.0) or 1.0),
+            "confidence": float(getattr(edge, "confidence", 1.0) or 1.0),
+            "source_doc": getattr(edge, "source_doc", "") or "",
+            "source_chunk": getattr(edge, "source_chunk", "") or "",
             "created_at": now,
         })
 

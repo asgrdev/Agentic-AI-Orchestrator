@@ -650,20 +650,22 @@ class SemanticGraphBuilder:
 
     async def get_graph_stats(self) -> dict[str, Any]:
         """آمار گراف"""
+        stats = {"entity_count": 0, "relation_count": 0}
         try:
-            result = await self.graph.execute(
-                """
-                MATCH (e:Entity)
-                WITH count(e) AS entity_count
-                MATCH ()-[r:RELATION]->()
-                RETURN entity_count, count(r) AS relation_count
-                """
+            # دو کوئری جدا — کوئری ترکیبی وقتی RELATION خالی است هیچ سطری برنمی‌گرداند
+            ent = await self.graph.execute(
+                "MATCH (e:Entity) RETURN count(e) AS entity_count"
             )
-            
-            if result.rows:
-                return dict(result.rows[0])
+            if ent.rows:
+                stats["entity_count"] = ent.rows[0].get("entity_count", 0)
+
+            rel = await self.graph.execute(
+                "MATCH ()-[r:RELATION]->() RETURN count(r) AS relation_count"
+            )
+            if rel.rows:
+                stats["relation_count"] = rel.rows[0].get("relation_count", 0)
         except Exception as e:
             logger.error("Stats query failed: %s", e)
-        
-        return {"entity_count": 0, "relation_count": 0}
+
+        return stats
 

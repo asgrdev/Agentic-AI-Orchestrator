@@ -288,8 +288,7 @@ class MLXBackend(LLMBackend):
     generation همزمان (sync) است → در executor اجرا می‌شود.
     """
 
-    # model weights are large — load once and share across all instances
-    _model_cache: dict[str, tuple] = {}
+    # کش مدل به core.model_gate منتقل شد — همان‌جا serial/concurrent کنترل می‌شود
 
     def __init__(
         self,
@@ -309,13 +308,14 @@ class MLXBackend(LLMBackend):
             ) from e
 
         self._generate = generate
-        if model_path not in MLXBackend._model_cache:
-            model, tokenizer = load(model_path)
-            MLXBackend._model_cache[model_path] = (model, tokenizer)
-            logger.info(f"MLX model loaded: {model_path}")
-        else:
-            logger.debug(f"MLX model reused from cache: {model_path}")
-        self.model, self.tokenizer = MLXBackend._model_cache[model_path]
+
+        # لود از طریق ModelGate — کش + کنترل serial/concurrent متمرکز
+        from core.model_gate import get_model_gate
+        self.model, self.tokenizer = get_model_gate().acquire(
+            key=f"mlx:{model_path}",
+            kind="llm",
+            loader=lambda: load(model_path),
+        )
         self._model_path = model_path
 
         # sampler یک‌بار ساخته می‌شود — overhead تکراری ندارد
@@ -342,7 +342,10 @@ class MLXBackend(LLMBackend):
     async def close(self) -> None:
         try:
             import mlx.core as mx
-            mx.metal.clear_cache()
+            if hasattr(mx, "clear_cache"):
+                mx.clear_cache()
+            else:
+                mx.metal.clear_cache()
         except Exception:
             pass
     
@@ -551,12 +554,9 @@ class Phi4MiniClient:
                 
 
     def __init__(self,config: dict | None = None ):
-        print(config)
-        print(self.defconfig)
- 
         resolved = config or self._DEFAULT_CONFIG
         cfg = resolved.get("phi3_mini") or self._DEFAULT_CONFIG["phi3_mini"]
-        print(cfg)
+        logger.debug("Phi4MiniClient config: %s", cfg)
 
       
         self._backend: LLMBackend = build_backend(cfg)

@@ -54,28 +54,44 @@ class SkillRegistry:
     def register(
         self,
         name: str,
-        func: Callable,
+        func: Optional[Callable] = None,
         description: str = "",
-        parameters: Optional[Dict[str, Any]] = None,
-        skill_type: Optional[SkillType] = None
+        parameters: Optional[Any] = None,
+        skill_type: Optional[SkillType] = None,
+        function: Optional[Callable] = None,
+        category: Optional[str] = None,
+        **extra: Any,
     ):
         """
         ثبت یک skill جدید
-        
+
         Args:
             name: نام skill
-            func: تابع قابل فراخوانی
+            func: تابع قابل فراخوانی (alias: function)
             description: توضیحات
-            parameters: پارامترهای مورد نیاز
+            parameters: پارامترهای مورد نیاز (dict یا list)
             skill_type: نوع skill
+            category: دسته‌بندی آزاد (برای skill های خارجی)
         """
-        self._skills[name] = func
+        callable_fn = func or function
+        if callable_fn is None:
+            raise ValueError(f"Skill '{name}' registered without a callable")
+
+        if isinstance(parameters, list):
+            parameters = {p: "any" for p in parameters}
+
+        self._skills[name] = callable_fn
         self._skill_metadata[name] = {
             "description": description,
             "parameters": parameters or {},
-            "type": skill_type.value if skill_type else "custom"
+            "type": skill_type.value if skill_type else (category or "custom"),
+            "category": category or (skill_type.value if skill_type else "custom"),
+            **extra,
         }
         logger.info(f"Registered skill: {name}")
+
+    # سازگاری با ماژول‌هایی که register_skill صدا می‌زنند
+    register_skill = register
     
     def get(self, name: str) -> Optional[Callable]:
         """دریافت یک skill"""

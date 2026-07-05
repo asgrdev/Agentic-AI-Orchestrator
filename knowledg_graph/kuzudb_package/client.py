@@ -24,6 +24,11 @@ class QueryResult:
     row_count: int = 0
     query: str = ""
 
+    @property
+    def rows(self) -> list[dict[str, Any]]:
+        """Alias — بخشی از کد با result.rows کار می‌کند."""
+        return self.data
+
     def first(self) -> Optional[dict[str, Any]]:
         return self.data[0] if self.data else None
 

@@ -165,17 +165,17 @@ class ChunkIngestionPipeline:
     ) -> None:
         """Chunk nodes را در KuzuDB ثبت می‌کند، سپس GraphBuilder برای entities/relations."""
 
-        # Chunk nodes
+        # Chunk nodes — GraphNode واقعی از models (AsyncKuzuManager.GraphNode وجود ندارد)
+        from knowledg_graph.kuzudb_package.models import GraphNode
+
         nodes = [
-            AsyncKuzuManager.GraphNode(
+            GraphNode(
                 id=c["id"],
                 name=c.get("title") or c["id"],
+                canonical_name=c.get("title") or c["id"],
                 type="Document",
-                properties={
-                    "content": c["content"],
-                    "source":  c["metadata"].get("source", ""),
-                    "url":     c["metadata"].get("url", ""),
-                },
+                description=(c.get("content") or "")[:500],
+                kb_url=c["metadata"].get("url", "") or "",
             )
             for c in chunks
         ]
