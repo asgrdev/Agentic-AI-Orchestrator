@@ -408,6 +408,7 @@ class ImprovedKnowledgeRefreshAgent:
         "i", "need", "want", "data", "about", "latest", "recent", "news",
         "information", "info", "please", "give", "me", "what", "is", "are",
         "tell", "show", "find", "get", "current", "update", "updates",
+        "new",
     }
 
     def _build_topic(self, state: AgentState) -> str:

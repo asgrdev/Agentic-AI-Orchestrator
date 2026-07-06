@@ -93,15 +93,17 @@ def _process_rss_mb() -> Optional[float]:
 
 
 def _memory_suffix() -> str:
-    """پسوند لاگ با وضعیت فعلی حافظه (RSS پروسه + Metal اگر موجود باشد)"""
-    parts = []
-    rss = _process_rss_mb()
-    if rss is not None:
-        parts.append(f"rss={rss:.0f}MB")
+    """پسوند لاگ با وضعیت فعلی حافظه‌ی GPU.
+
+    فقط metal — عدد RSS با unified memory اپل گمراه‌کننده است (بعد از لود
+    مدل حتی «کمتر» نشان می‌داد)؛ RSS همچنان در stats() موجود است."""
     metal = _metal_active_mb()
     if metal is not None:
-        parts.append(f"metal={metal:.0f}MB")
-    return f" | {' '.join(parts)}" if parts else ""
+        return f" | metal={metal:.0f}MB"
+    rss = _process_rss_mb()
+    if rss is not None:
+        return f" | rss={rss:.0f}MB"
+    return ""
 
 
 @dataclass

@@ -3,12 +3,25 @@ from typing import Optional
 
 @dataclass
 class Entity:
+    """
+    موجودیت استخراج‌شده از متن (خروجی NER + entity linking).
+
+    نکته: id و canonical باید فیلد اعلام‌شده باشند — نسخه‌ی قبلی آن‌ها را
+    فقط در __post_init__ می‌خواند و چون field نبودند، ساختن هر Entity با
+    «'Entity' object has no attribute 'id'» خطا می‌داد و استخراج موجودیت
+    کل پایپ‌لاین همیشه صفر می‌شد.
+    """
 
     text: str
     type: str
     start: int
     end: int
     confidence: float
+
+    # شناسه‌ی یکتا — اگر خالی بماند از normalized ساخته می‌شود
+    id: str = ""
+    # شکل استاندارد نام (برای گراف) — اگر خالی بماند همان text است
+    canonical: str = ""
 
     normalized: Optional[str] = None
 

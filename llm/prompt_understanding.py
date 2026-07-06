@@ -403,13 +403,19 @@ class MLXBackend(LLMBackend):
                 model, tokenizer = self._gate.acquire(
                     key=self._model_key, kind="llm", loader=self._model_loader
                 )
-                return self._generate(
+                raw = self._generate(
                     model,
                     tokenizer,
                     prompt=prompt,
                     verbose=False,
                     **gen_kwargs,
                 )
+            # اگر مدل thinking token داشت جدا کن تا JSON خروجی تمیز parse شود
+            from llm.thinking import split_thinking
+            thinking, answer = split_thinking(raw)
+            if thinking:
+                logger.debug("planner thinking: %s", thinking[:500])
+            return answer or raw
 
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _run_generation)
@@ -547,7 +553,8 @@ class Phi4MiniClient:
     _DEFAULT_CONFIG = {
         "phi3_mini": {
             "backend": "mlx",
-            "model_path": "/Users/dbk/Desktop/RAG/models/phi3_mini",
+            # اول models/phi3_mini لوکال پروژه، بعد مسیر مطلق قدیمی
+            "model_path": None,  # در __init__ با resolve_model_path پر می‌شود
         }
     }
 
@@ -561,7 +568,13 @@ class Phi4MiniClient:
 
     def __init__(self,config: dict | None = None ):
         resolved = config or self._DEFAULT_CONFIG
-        cfg = resolved.get("phi3_mini") or self._DEFAULT_CONFIG["phi3_mini"]
+        cfg = dict(resolved.get("phi3_mini") or self._DEFAULT_CONFIG["phi3_mini"])
+        # مسیر مدل: اول models/phi3_mini لوکال پروژه، بعد مسیر مطلق قدیمی
+        if cfg.get("backend") in ("mlx", "llama_cpp") and not cfg.get("model_path"):
+            from core.model_paths import resolve_model_path
+            cfg["model_path"] = resolve_model_path(
+                "phi3_mini", "/Users/dbk/Desktop/RAG/models/phi3_mini"
+            )
         logger.debug("Phi4MiniClient config: %s", cfg)
 
       
@@ -575,7 +588,7 @@ class Phi4MiniClient:
         
         
     def _build_tools_desc_withparam(self) -> str:
-        """یک‌بار ساخته می‌شود — TOOL_REGISTRY تغییر نمی‌کند"""
+        """یک‌بار ساخته می‌شود — TOOL_REGISTRY تغییر نمی‌کند (بدون indent تا prefill کوتاه‌تر شود)"""
         return json.dumps(
             [
                 {
@@ -586,7 +599,6 @@ class Phi4MiniClient:
                 for t in TOOL_REGISTRY
             ],
             ensure_ascii=False,
-            indent=2,
         )
         
     def _build_tools_desc(self) -> str:

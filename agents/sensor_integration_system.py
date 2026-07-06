@@ -64,7 +64,14 @@ class SensorOutput:
 class VisionSensorWrapper:
     """Wrapper برای Vision sensor (YOLO)"""
     
-    def __init__(self, model_path: str = "yolov8n.pt"):
+    def __init__(self, model_path: str | None = None):
+        if model_path is None:
+            # اول models/yolo11x.pt لوکال؛ اگر نبود ultralytics خودش
+            # yolov8n.pt را دانلود می‌کند (fallback سبک)
+            from core.model_paths import resolve_model_path
+            from pathlib import Path
+            local = resolve_model_path("yolo11x.pt", "yolov8n.pt")
+            model_path = local if Path(local).exists() else "yolov8n.pt"
         self.model_path = model_path
         self._model = None
     
@@ -150,7 +157,13 @@ class VisionSensorWrapper:
 class AudioSensorWrapper:
     """Wrapper برای Audio sensor (Whisper)"""
     
-    def __init__(self, model_name: str = "base"):
+    def __init__(self, model_name: str | None = None):
+        if model_name is None:
+            # اول models/whisper-medium لوکال؛ وگرنه «base» (دانلود سبک)
+            from core.model_paths import resolve_model_path
+            from pathlib import Path
+            local = resolve_model_path("whisper-medium", "")
+            model_name = local if local and Path(local).exists() else "base"
         self.model_name = model_name
         self._processor = None
     
@@ -226,7 +239,12 @@ class AudioSensorWrapper:
 class TextSensorWrapper:
     """Wrapper برای Text sensor (BERT)"""
     
-    def __init__(self, model_name: str = "bert-base-cased"):
+    def __init__(self, model_name: str | None = None):
+        if model_name is None:
+            from core.model_paths import resolve_model_path
+            from pathlib import Path
+            local = resolve_model_path("bert-base-cased", "")
+            model_name = local if local and Path(local).exists() else "bert-base-cased"
         self.model_name = model_name
         self._embedder = None
     
@@ -313,13 +331,13 @@ class SensorIntegrationSystem:
         
         # Initialize sensors (lazy loading)
         self.vision = VisionSensorWrapper(
-            model_path=self.config.get("vision_model", "yolov8n.pt")
+            model_path=self.config.get("vision_model")
         )
         self.audio = AudioSensorWrapper(
-            model_name=self.config.get("audio_model", "base")
+            model_name=self.config.get("audio_model")
         )
         self.text = TextSensorWrapper(
-            model_name=self.config.get("text_model", "bert-base-cased")
+            model_name=self.config.get("text_model")
         )
         
         logger.info("SensorIntegrationSystem initialized")

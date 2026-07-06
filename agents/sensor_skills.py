@@ -361,6 +361,145 @@ def analyze_media_file(file_path: str) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════
+# ADVANCED VISION SKILLS — مدل‌های لوکال YOLO11 (pose / segmentation)
+# ═══════════════════════════════════════════════════════════════
+
+# کش مدل‌های YOLO تخصصی — لود مجدد در هر فراخوانی گران است
+_yolo_cache: Dict[str, Any] = {}
+
+
+def _load_yolo(model_file: str):
+    if model_file not in _yolo_cache:
+        from core.model_paths import resolve_model_path
+        from sensors.vision_module.processors.yolo_wrappers import YOLO
+        if YOLO is None:
+            raise ImportError("ultralytics YOLO not available")
+        path = resolve_model_path(model_file, model_file)
+        _yolo_cache[model_file] = YOLO(path)
+        logger.info("YOLO model loaded for skill: %s", path)
+    return _yolo_cache[model_file]
+
+
+def estimate_pose_in_image(image_path: str, conf_threshold: float = 0.25) -> Dict[str, Any]:
+    """
+    تخمین ژست انسان (keypoints) با YOLO11-pose — مدل لوکال models/yolo11xpos.pt
+
+    Returns:
+        dict با تعداد افراد و keypoint های هر نفر
+    """
+    import time as _t
+    start = _t.time()
+    try:
+        model = _load_yolo("yolo11xpos.pt")
+        results = model(image_path, conf=conf_threshold)
+
+        persons = []
+        for r in results:
+            if getattr(r, "keypoints", None) is None:
+                continue
+            kp_names = getattr(r, "names", {})
+            for i in range(len(r.keypoints)):
+                kps = r.keypoints[i]
+                xy = kps.xy[0].tolist() if hasattr(kps, "xy") else []
+                conf = (
+                    kps.conf[0].tolist()
+                    if getattr(kps, "conf", None) is not None else []
+                )
+                persons.append({
+                    "person": i + 1,
+                    "keypoints": [
+                        {"x": round(p[0], 1), "y": round(p[1], 1),
+                         "confidence": round(conf[j], 2) if j < len(conf) else None}
+                        for j, p in enumerate(xy)
+                    ],
+                })
+        return {
+            "success": True,
+            "persons": persons,
+            "count": len(persons),
+            "image_path": image_path,
+            "processing_time": _t.time() - start,
+        }
+    except Exception as e:
+        logger.error(f"Pose estimation failed: {e}")
+        return {"success": False, "error": str(e), "persons": [], "count": 0}
+
+
+def segment_image_objects(image_path: str, conf_threshold: float = 0.25) -> Dict[str, Any]:
+    """
+    قطعه‌بندی اشیاء (instance segmentation) با YOLO11-seg —
+    مدل لوکال models/yolo11xseg.pt
+
+    Returns:
+        dict با لیست اشیاء و درصد مساحت ماسک هر شیء
+    """
+    import time as _t
+    start = _t.time()
+    try:
+        model = _load_yolo("yolo11xseg.pt")
+        results = model(image_path, conf=conf_threshold)
+
+        objects = []
+        for r in results:
+            boxes = getattr(r, "boxes", None)
+            masks = getattr(r, "masks", None)
+            if boxes is None:
+                continue
+            h, w = (r.orig_shape if getattr(r, "orig_shape", None) else (1, 1))
+            img_area = float(h * w) or 1.0
+            for i, box in enumerate(boxes):
+                area_pct = None
+                if masks is not None and i < len(masks):
+                    try:
+                        m = masks.data[i]
+                        area_pct = round(float(m.sum()) / float(m.numel()) * 100, 1)
+                    except Exception:
+                        pass
+                objects.append({
+                    "class_name": r.names[int(box.cls[0])],
+                    "confidence": round(float(box.conf[0]), 2),
+                    "mask_area_pct": area_pct,
+                })
+        return {
+            "success": True,
+            "objects": objects,
+            "count": len(objects),
+            "image_path": image_path,
+            "processing_time": _t.time() - start,
+        }
+    except Exception as e:
+        logger.error(f"Segmentation failed: {e}")
+        return {"success": False, "error": str(e), "objects": [], "count": 0}
+
+
+def list_local_models() -> Dict[str, Any]:
+    """
+    فهرست مدل‌های لوکال موجود و قابلیت‌هایشان — برای planner و سناریوهای
+    چند-عاملی (A2A) تا بدانند برای هر مرحله چه ابزاری در دسترس است.
+    """
+    try:
+        from configs.model_catalog import get_model_catalog
+        catalog = get_model_catalog()
+        return {
+            "success": True,
+            "models": [
+                {
+                    "name": e["name"], "kind": e["kind"],
+                    "capabilities": e["capabilities"],
+                    "used_by_skills": e["used_by"],
+                    "available": e["available"],
+                }
+                for e in catalog
+            ],
+            "available_count": sum(1 for e in catalog if e["available"]),
+            "total": len(catalog),
+        }
+    except Exception as e:
+        logger.error(f"list_local_models failed: {e}")
+        return {"success": False, "error": str(e), "models": []}
+
+
+# ═══════════════════════════════════════════════════════════════
 # SKILL REGISTRY
 # ═══════════════════════════════════════════════════════════════
 
@@ -380,7 +519,22 @@ SENSOR_SKILLS = {
         "parameters": ["image_path"],
         "returns": "dict با نوع صحنه"
     },
-    
+    "estimate_pose_in_image": {
+        "function": estimate_pose_in_image,
+        "description": "تخمین ژست انسان (keypoints) با YOLO11-pose — مدل لوکال",
+        "category": "vision",
+        "parameters": ["image_path", "conf_threshold"],
+        "returns": "dict با keypoint های هر فرد"
+    },
+    "segment_image_objects": {
+        "function": segment_image_objects,
+        "description": "قطعه‌بندی اشیاء تصویر (instance segmentation) با YOLO11-seg — مدل لوکال",
+        "category": "vision",
+        "parameters": ["image_path", "conf_threshold"],
+        "returns": "dict با اشیاء و مساحت ماسک"
+    },
+
+
     # Audio Skills
     "transcribe_audio_file": {
         "function": transcribe_audio_file,
@@ -427,6 +581,15 @@ SENSOR_SKILLS = {
         "category": "multimodal",
         "parameters": ["file_path"],
         "returns": "dict با تحلیل کامل"
+    },
+
+    # Meta
+    "list_local_models": {
+        "function": list_local_models,
+        "description": "فهرست مدل‌های لوکال موجود و قابلیت‌هایشان (برای planning و A2A)",
+        "category": "meta",
+        "parameters": [],
+        "returns": "dict با کاتالوگ مدل‌ها"
     },
 }
 

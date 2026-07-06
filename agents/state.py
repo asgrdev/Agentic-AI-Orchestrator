@@ -64,6 +64,12 @@ class AgentState:
     # متا
     errors:              list[str] = field(default_factory=list)
     timings:             dict[str, float] = field(default_factory=dict)
+    # trace مرتبِ گره‌های طی‌شده برای نمایش گراف فلو (tab «Flow»)
+    # هر ورودی: {step, duration, status, detail, ts}
+    flow_trace:          list[dict] = field(default_factory=list)
+    # «فرایند فکر» قابل‌نمایش در چت — بلاک‌های <think> مدل‌ها + خلاصه‌ی
+    # تصمیم‌های orchestrator؛ هر ورودی: {stage, text, ts}
+    thinking_log:        list[dict] = field(default_factory=list)
     metadata:            dict[str, Any] = field(default_factory=dict)
     created_at:          datetime = field(default_factory=datetime.utcnow)
     

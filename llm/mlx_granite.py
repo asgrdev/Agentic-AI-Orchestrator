@@ -11,7 +11,7 @@ _JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 @dataclass(frozen=True)
 class MlxGraniteConfig:
-    model_path: str = "/Users/dbk/Desktop/RAG/models/granite4_3b"#"granite4-7b-instruct"
+    model_path: str = ""  # خالی → در __init__ با resolve_model_path پر می‌شود
     max_tokens: int = 1500
     temperature: float = 0.74
     top_p: float = 0.94
@@ -37,9 +37,12 @@ class MlxGraniteAnswerGenerator:
         # لود lazy از طریق ModelGate — قبلاً این کلاس granite را مستقیم لود
         # می‌کرد و در کنار phi3 و embedding روی GPU می‌ماند → METAL OOM
         from core.model_gate import get_model_gate
+        from core.model_paths import resolve_model_path
         self._gate = get_model_gate()
-        self._model_key = f"mlx:{cfg.model_path}"
-        _path = cfg.model_path
+        _path = cfg.model_path or resolve_model_path(
+            "granite4_3b", "/Users/dbk/Desktop/RAG/models/granite4_3b"
+        )
+        self._model_key = f"mlx:{_path}"
         self._model_loader = lambda: self._load(_path)
 
         # make_sampler signature varies across mlx-lm versions; fall back to a

@@ -32,7 +32,9 @@ class ModelWrapper:
     def model(self) -> Any:
         """دریافت مدل (با lazy loading)"""
         if self._model_cache is None:
-            logger.info(f"🔄 Loading model: {self.model_name}")
+            # debug — هر wrapper جدا این را می‌زد و ۴ بار در لاگ تکرار می‌شد؛
+            # لود واقعی وزن‌ها را ModelGate با جزئیات لاگ می‌کند
+            logger.debug(f"🔄 Loading model: {self.model_name}")
             self._model_cache = self._model_manager.get_model(self.model_name)
         return self._model_cache
     

@@ -222,6 +222,14 @@ class DataCollectorManager:
         logger.info("📚 collect_knowledge started | query={!r}", query)
         try:
             result = self.knowledge.search_wikipedia(query, max_results=max_results)
+            # نتیجه لاگ شود — قبلاً «۰ آیتم» بی‌صدا رد می‌شد و معلوم نبود
+            # ویکی‌پدیا چیزی برنگردانده یا در مسیر ingest گم شده
+            logger.info(
+                "📚 Wikipedia returned {} items for {!r} (errors={})",
+                len(result.items), query, len(result.errors),
+            )
+            if result.errors:
+                logger.warning("Wikipedia errors: {}", result.errors)
             return result.items
         except Exception as e:
             logger.warning(f"Wikipedia: {e}")
@@ -233,6 +241,7 @@ class DataCollectorManager:
         "i", "need", "want", "data", "about", "latest", "recent", "news",
         "information", "info", "please", "give", "me", "what", "is", "are",
         "tell", "show", "find", "get", "current", "update", "updates",
+        "new",
     }
 
     def _keyword_filter(

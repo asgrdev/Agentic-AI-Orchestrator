@@ -5,6 +5,17 @@ from typing import Callable, Any
 
 def _make_config() -> dict:
     # ── فقط reference به کلاس‌ها، نه ساخت instance ───────────────
+    from core.model_paths import resolve_model_path
+
+    # مدل پاسخ‌دهی/استدلال — پیش‌فرض 3b؛ نسخه 7b حافظه Metal را تا ~15GB
+    # می‌برد. اول models/granite4_3b لوکال، بعد مسیر مطلق قدیمی.
+    granite_model_path = os.getenv("GRANITE_MODEL_PATH") or resolve_model_path(
+        "granite4_3b", "/Users/dbk/Desktop/RAG/models/granite4_3b"
+    )
+    embed_model_path = resolve_model_path(
+        "Qwen3-Embedding-0.6B",
+        "/Users/dbk/Desktop/agentic-graph-RAG/models/Qwen3-Embedding-0.6B",
+    )
 
     def make_phi4_client():
         from llm.prompt_understanding import Phi4MiniClient
@@ -12,11 +23,12 @@ def _make_config() -> dict:
 
     def make_granite_client():
         from llm.granite_client.mlx_client import MlxGraniteClient
-        return MlxGraniteClient()
+        from llm.granite_client.config import MlxGraniteConfig
+        return MlxGraniteClient(MlxGraniteConfig(model_path=granite_model_path))
 
     def make_embed_client():
         from ingestion.embedding_generator import Qwen3EmbeddingClient
-        return Qwen3EmbeddingClient(model_path="/Users/dbk/Desktop/agentic-graph-RAG/models/Qwen3-Embedding-0.6B")
+        return Qwen3EmbeddingClient(model_path=embed_model_path)
 
     def make_context_builder():
         from ingestion.context_builder import ContextBuilder
@@ -42,6 +54,8 @@ def _make_config() -> dict:
             "max_concurrent_inferences": int(os.getenv("MODEL_MAX_CONCURRENT", "2")),
             "log_memory": True,
         },
+        # مسیر مدل پاسخ‌دهی (env: GRANITE_MODEL_PATH)
+        "granite_model_path": granite_model_path,
 
         # ── بقیه configها بدون تغییر ─────────────────────────────
         "kuzu_path": "./data/kuzu_db",

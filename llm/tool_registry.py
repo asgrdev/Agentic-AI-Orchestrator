@@ -88,3 +88,60 @@ async def _summarize(text: str, max_sentences: int = 3) -> dict:
 )
 async def _retrieve(query: str, top_k: int = 5) -> dict:
     return {"query": query, "top_k": top_k, "chunks": []}
+
+
+# ── Media / local-model tools ────────────────────────────────────────
+# اجرای واقعی این‌ها از طریق global skill registry انجام می‌شود
+# (agents/sensor_skills.py) — این ورودی‌ها منوی planner هستند تا در
+# planهای چندمرحله‌ای و سناریوهای A2A قابل انتخاب باشند.
+
+@register_tool(
+    "detect_objects_in_image",
+    "Detect objects in an image file with local YOLO11 "
+    "(use only when the query references an image file path)",
+    {"image_path": "string — path to the image", "conf_threshold": "float — optional"},
+)
+def _detect_objects_in_image(image_path: str, conf_threshold: float = 0.25) -> dict:
+    from agents.sensor_skills import detect_objects_in_image
+    return detect_objects_in_image(image_path, conf_threshold)
+
+
+@register_tool(
+    "estimate_pose_in_image",
+    "Estimate human poses (keypoints) in an image with local YOLO11-pose",
+    {"image_path": "string", "conf_threshold": "float — optional"},
+)
+def _estimate_pose_in_image(image_path: str, conf_threshold: float = 0.25) -> dict:
+    from agents.sensor_skills import estimate_pose_in_image
+    return estimate_pose_in_image(image_path, conf_threshold)
+
+
+@register_tool(
+    "segment_image_objects",
+    "Instance-segment objects in an image with local YOLO11-seg (mask area per object)",
+    {"image_path": "string", "conf_threshold": "float — optional"},
+)
+def _segment_image_objects(image_path: str, conf_threshold: float = 0.25) -> dict:
+    from agents.sensor_skills import segment_image_objects
+    return segment_image_objects(image_path, conf_threshold)
+
+
+@register_tool(
+    "transcribe_audio_file",
+    "Transcribe speech in an audio file to text with local Whisper",
+    {"audio_path": "string", "language": "string — optional, auto-detect if omitted"},
+)
+def _transcribe_audio_file(audio_path: str, language: str | None = None) -> dict:
+    from agents.sensor_skills import transcribe_audio_file
+    return transcribe_audio_file(audio_path, language)
+
+
+@register_tool(
+    "list_local_models",
+    "List locally available AI models and their capabilities "
+    "(useful to decide which tools can run in a multi-step plan)",
+    {},
+)
+def _list_local_models() -> dict:
+    from agents.sensor_skills import list_local_models
+    return list_local_models()

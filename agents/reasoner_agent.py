@@ -94,12 +94,13 @@ class ReasonerAgent:
                 }
                 for s in cited.reasoning_steps
             ]
-            logger.info(state.final_answer)
-            
-            logger.info(state.citations)
-            
-            logger.info(state.reasoning_trace)
-            
+            # جزئیات chain-of-thought فقط در DEBUG — دامپ کامل در INFO لاگ را
+            # غیرقابل خواندن می‌کرد؛ خلاصه در خط «Reasoning done» هست
+            logger.debug("Answer: %s", state.final_answer)
+            logger.debug("Citations: %s", state.citations)
+            logger.debug("Reasoning trace: %s", state.reasoning_trace)
+
+
             # fused_context را هم اینجا می‌سازیم (کار ReasonerAgent است)
             retrieval.fused_context = cited.format_with_citations()
 

@@ -3,9 +3,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+def _default_granite_path() -> str:
+    # اول models/granite4_3b لوکال پروژه؛ بعد مسیر مطلق قدیمی
+    from core.model_paths import resolve_model_path
+    return resolve_model_path("granite4_3b", "/Users/dbk/Desktop/RAG/models/granite4_3b")
+
+
 @dataclass(frozen=True)
 class MlxGraniteConfig:
-    model_path: str = "/Users/dbk/Desktop/RAG/models/granite4-7b"#"granite4-7b-instruct"
+    model_path: str = _default_granite_path()
     max_tokens: int = 1500
     temperature: float = 0.74
     top_p: float = 0.94

@@ -116,6 +116,12 @@ class MlxGraniteClient(BaseGraniteClient):
             return str(out.get("text", ""))
         return str(out)
 
+    @staticmethod
+    def _split_think_tags(raw: str) -> tuple[str, str]:
+        """جداسازی توکن‌های فکر (<think>...) از پاسخ — برای نمایش در چت"""
+        from llm.thinking import split_thinking
+        return split_thinking(raw)
+
     # ─── Public interface ─────────────────────────────────────────
 
     def generate(
@@ -138,8 +144,11 @@ class MlxGraniteClient(BaseGraniteClient):
             system=system or SYSTEM_DEFAULT,
             context=context,
         )
-        text = self._call_model(full_prompt, max_tokens)
-        return LLMResponse(text=text.strip())
+        raw = self._call_model(full_prompt, max_tokens)
+        # اگر مدل thinking token داشت (<think>...) جدا کن — پاسخ تمیز به
+        # کاربر می‌رسد و فکر در فیلد reasoning برای نمایش در UI می‌ماند
+        thinking, text = self._split_think_tags(raw)
+        return LLMResponse(text=text.strip(), reasoning=thinking or None)
 
     def reason_step(
         self,
@@ -187,8 +196,11 @@ class MlxGraniteClient(BaseGraniteClient):
 
         raw_text = self._call_model(full_prompt, max_tokens=None)
 
-        # جداسازی reasoning از answer
+        # اول توکن‌های فکر (<think>)، بعد الگوی REASONING:/ANSWER:
+        think, raw_text = self._split_think_tags(raw_text)
         reasoning, answer = self._split_reasoning(raw_text)
+        if think:
+            reasoning = f"{think}\n{reasoning}".strip()
 
         return LLMResponse(
             text=answer.strip(),

@@ -9,6 +9,7 @@ ChunkIngestionPipeline
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Callable, Optional
@@ -169,11 +170,31 @@ class ChunkIngestionPipeline:
         embedded_ok = await self._embed_chunks(chunks)
 
         # ── 4. Weaviate upsert ─────────────────────────────────────────
+        # فقط فیلدهایی که امضای WeaviateStore.upsert می‌پذیرد پاس می‌شوند —
+        # پاس‌دادن مستقیم chunk (با کلیدهای id/text/title/metadata) باعث
+        # «unexpected keyword argument 'id'» می‌شد و هیچ ingest ای کامل نمی‌شد
         t0 = time.perf_counter()
-        await self._weaviate.upsert_batch(items=chunks)
+        upsert_items = []
+        for idx, c in enumerate(chunks):
+            if not c.get("embedding"):
+                logger.warning("Chunk %s بدون embedding — از upsert صرف‌نظر شد", c["id"])
+                continue
+            meta = c.get("metadata") or {}
+            upsert_items.append({
+                "chunk_id":       c["chunk_id"],
+                "content":        c["content"],
+                "embedding":      c["embedding"],
+                "source":         str(meta.get("source", "")),
+                "doc_id":         str(meta.get("doc_id") or c.get("title") or ""),
+                "entity_ids":     c.get("entity_ids", []),
+                "chunk_index":    idx,
+                "extra_metadata": json.dumps(meta, ensure_ascii=False, default=str),
+            })
+        if upsert_items:
+            await self._weaviate.upsert_batch(items=upsert_items)
         logger.info(
-            "🗄️ Weaviate upsert | chunks=%d (embedded=%d) | %.1fs",
-            len(chunks), embedded_ok, time.perf_counter() - t0,
+            "🗄️ Weaviate upsert | chunks=%d (embedded=%d, upserted=%d) | %.1fs",
+            len(chunks), embedded_ok, len(upsert_items), time.perf_counter() - t0,
         )
 
         # ── 5. KuzuDB: Chunk nodes + Entity nodes + MENTIONS edges ─────

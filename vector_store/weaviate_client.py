@@ -385,19 +385,39 @@ class WeaviateStore:
             logger.error("Upsert failed for %s: %s", chunk_id, e)
             return UpsertResult(chunk_id=chunk_id, created=False, error=str(e))
 
+    # فیلدهای مجاز امضای upsert — کلیدهای اضافی dict ها (id/text/title/...)
+    # به‌جای TypeError نادیده گرفته می‌شوند
+    _UPSERT_FIELDS = frozenset({
+        "chunk_id", "content", "embedding", "source", "doc_id", "entity_ids",
+        "chunk_index", "token_count", "language", "extra_metadata",
+    })
+    # نام‌های جایگزین رایج در callerهای مختلف → نام رسمی
+    _UPSERT_ALIASES = {"id": "chunk_id", "text": "content", "vector": "embedding"}
+
     async def upsert_batch(
         self,
         items: list[dict],
         tenant: Optional[str] = None,
     ) -> list[UpsertResult]:
         """
-        items: list of dicts با همان پارامترهای upsert
+        items: list of dicts با پارامترهای upsert.
+        کلیدهای ناشناخته حذف و نام‌های جایگزین (id/text/vector) نگاشت می‌شوند
+        تا caller های مختلف (pipeline/workflow/dashboard) بدون crash کار کنند.
         """
         results: list[UpsertResult] = []
         for i in range(0, len(items), self.batch_size):
-            chunk = items[i : i + self.batch_size]
-            for item in chunk:
-                r = await self.upsert(**item, tenant=tenant)
+            batch = items[i : i + self.batch_size]
+            for item in batch:
+                payload = {}
+                for k, v in item.items():
+                    k = self._UPSERT_ALIASES.get(k, k)
+                    if k in self._UPSERT_FIELDS and k not in payload:
+                        payload[k] = v
+                missing = {"chunk_id", "content", "embedding"} - payload.keys()
+                if missing:
+                    logger.warning("upsert_batch: item بدون فیلدهای %s رد شد", missing)
+                    continue
+                r = await self.upsert(**payload, tenant=tenant)
                 results.append(r)
             logger.debug("Batch progress: %d/%d", min(i + self.batch_size, len(items)), len(items))
         return results

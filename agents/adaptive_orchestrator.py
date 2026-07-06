@@ -1,15 +1,40 @@
 """
-Adaptive Orchestrator - هماهنگ‌کننده هوشمند با کنترل داینامیک فلو
+Adaptive Orchestrator — هماهنگ‌کننده‌ی فلو، به سبک StateGraph در LangGraph.
 
-این orchestrator می‌تواند:
-1. Query را تحلیل و طبقه‌بندی کند
-2. Strategy مناسب را انتخاب کند
-3. فلو را به صورت داینامیک کنترل کند
-4. مراحل غیرضروری را skip کند
-5. زودتر خارج شود (early exit)
+گراف فلو (همان چیزی که tab «Flow» نمایش می‌دهد):
+
+                          ┌─────────┐
+                     ┌───▶│ REFRESH │────┐
+                     │    └─────────┘    ▼
+    START ─▶ UNDERSTAND ─▶ RETRIEVE ─▶ ASSESS ─▶ REASON ─▶ VALIDATE ─▶ ANSWER
+      │                        ▲                    │          │  ▲       ▲
+      │                        └────────────────────┼──────────┘  │       │
+      └─▶ SHORTCUT (پاسخ مستقیم گفت‌وگو/محاسبه) ────┼─────────────┘───────┘
+                                                    ▼
+                                                  ERROR
+
+معادل مفاهیم LangGraph در این کد:
+┌──────────────────────┬──────────────────────────────────────────────────┐
+│ مفهوم LangGraph      │ این‌جا                                           │
+├──────────────────────┼──────────────────────────────────────────────────┤
+│ State                │ agents/state.py → AgentState                     │
+│ Node                 │ متدهای _step_* (جدول _STEP_HANDLERS پایین‌تر)    │
+│ Conditional Edge     │ مقدار بازگشتی هر _step_* (FlowStep بعدی)         │
+│ Graph definition     │ self._transitions (یال‌های مجاز)                 │
+│ compile().invoke()   │ run() → _execute_dynamic_plan()                  │
+│ Checkpointer         │ core/session_store.py (ذخیره‌ی trace هر اجرا)   │
+│ recursion_limit      │ DynamicPlan.max_iterations                       │
+└──────────────────────┴──────────────────────────────────────────────────┘
+
+هر گره (node) یک متد async است که state را می‌گیرد، کارش را می‌کند و نام
+گره‌ی بعدی را برمی‌گرداند — برای اضافه‌کردن گره‌ی جدید: متد _step_<name>
+بسازید، به _STEP_HANDLERS و _transitions اضافه کنید و به FlowStep در
+state.py یک مقدار بدهید. مسیر طی‌شده در state.flow_trace ثبت و در UI
+نمایش داده می‌شود؛ «فکر» مدل‌ها هم در state.thinking_log جمع می‌شود.
 """
 from __future__ import annotations
 
+import re
 import time
 import logging
 import gc
@@ -17,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agents.state import AgentState, FlowStep
+from agents.query_shortcuts import is_conversational, extract_calc_expression
 from agents.query_classifier import QueryClassifier, QueryAnalysis, QueryType, QueryComplexity
 from agents.retriever_agent import RetrieverAgent
 from agents.reasoner_agent import ReasonerAgent
@@ -82,8 +108,13 @@ class AdaptiveOrchestrator:
         # جایگزینی skill های stub با پیاده‌سازی واقعی (vector/graph/web)
         self._register_real_skills()
 
-        # آمار اجرای فلو برای dashboard
-        self.flow_history: list[dict] = []
+        # آمار اجرای فلو برای dashboard/Flow — تاریخچه‌ی ذخیره‌شده‌ی
+        # سشن‌های قبلی هم لود می‌شود تا بعد از restart از بین نرود
+        from core.session_store import get_session_store
+        self._session_store = get_session_store()
+        self.flow_history: list[dict] = self._session_store.load_recent(200)
+        # state کوئری در حال اجرا (یا آخرین) — برای نمایش زنده در tab «Flow»
+        self.active_state: Optional[AgentState] = None
         
         # نگاشت انتقال‌های مجاز (برای validation)
         self._transitions: dict[FlowStep, list[FlowStep]] = {
@@ -215,8 +246,21 @@ class AdaptiveOrchestrator:
         """
         state = AgentState(query=query, session_id=session_id)
         state.current_step = FlowStep.START
-        
+        self._trace(state, "start", 0.0)
+        # state فعال برای نمایش زنده در tab «Flow»
+        self.active_state = state
+
         try:
+            # مرحله 0: میان‌برها — «hello» یا «2+2» نباید کل RAG را طی کند
+            # (قبلاً هر سلام ساده ~۲ دقیقه understand+retrieve+refresh می‌خورد)
+            if await self._try_shortcut(state):
+                self._record_flow(state)
+                logger.info(
+                    "Query answered via shortcut (%s) — full RAG flow skipped",
+                    state.strategy,
+                )
+                return state
+
             # مرحله 1: UNDERSTAND + Query Analysis
             await self._step_understand_and_analyze(state)
             
@@ -231,6 +275,7 @@ class AdaptiveOrchestrator:
             logger.error(f"Orchestrator failed: {e}", exc_info=True)
             state.current_step = FlowStep.ERROR
             state.errors.append(str(e))
+            self._trace(state, "error", 0.0, status="error", detail=str(e)[:120])
         finally:
             gc.collect()
 
@@ -242,17 +287,177 @@ class AdaptiveOrchestrator:
                 f"(مرحله: {state.current_step.value} | خطا: {last_error})"
             )
 
+        if state.current_step == FlowStep.ANSWER and (
+            not state.flow_trace or state.flow_trace[-1]["step"] != "answer"
+        ):
+            self._trace(state, "answer", 0.0, detail=f"confidence={state.confidence:.2f}")
+
         # ثبت در تاریخچه فلو (برای dashboard)
         self._record_flow(state)
 
         logger.info(f"Query completed: {state.current_step} | confidence: {state.confidence:.2f}")
         return state
 
+    # ══════════════════════════════════════════════════════════════
+    # Flow Trace — برای نمایش گراف اجرای زنده (api/flow_visualizer)
+    # ══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _trace(
+        state: AgentState,
+        step: str,
+        duration: float,
+        status: str = "done",
+        detail: str = "",
+    ) -> None:
+        state.flow_trace.append({
+            "step": step,
+            "duration": round(duration, 3),
+            "status": status,
+            "detail": detail,
+            "ts": time.time(),
+        })
+
+    @staticmethod
+    def _think(state: AgentState, stage: str, text: str) -> None:
+        """ثبت یک قطعه‌ی «فکر» برای نمایش زنده در حباب 🧠 چت"""
+        if text and text.strip():
+            state.thinking_log.append({
+                "stage": stage, "text": text.strip(), "ts": time.time(),
+            })
+
+    # ══════════════════════════════════════════════════════════════
+    # فلوی دستی برای پرسش روی فایل‌های آپلودشده
+    # (تا این کوئری‌ها هم trace/نمایش زنده/سشن ذخیره‌شده داشته باشند —
+    #  قبلاً مسیر فایل هیچ state ای نمی‌ساخت و در Flow دیده نمی‌شد)
+    # ══════════════════════════════════════════════════════════════
+
+    def begin_manual_flow(self, query: str, session_id: str = "files") -> AgentState:
+        """شروع یک فلوی دستی (خارج از run) — state فعال و trace ساخته می‌شود"""
+        state = AgentState(query=query, session_id=session_id)
+        state.current_step = FlowStep.START
+        state.strategy = "file_analysis"
+        self._trace(state, "start", 0.0)
+        self.active_state = state
+        return state
+
+    def note_file_processed(
+        self, state: AgentState, filename: str, report: str, duration: float
+    ) -> None:
+        """ثبت پردازش یک فایل در trace و فکر (گره FILES در گراف)"""
+        state.current_step = FlowStep.START  # هنوز به answer نرسیده‌ایم
+        self._trace(state, "files", duration, detail=filename)
+        self._think(state, "file", f"**{filename}**:\n{report.strip()[:600]}")
+
+    async def finish_manual_flow(
+        self, state: AgentState, answer: str, confidence: float = 0.9
+    ) -> AgentState:
+        """پایان فلوی دستی: ثبت پاسخ، trace نهایی و ذخیره‌ی سشن"""
+        state.final_answer = answer
+        state.confidence = confidence
+        state.current_step = FlowStep.ANSWER
+        self._trace(state, "answer", 0.0, detail=f"confidence={confidence:.2f}")
+        self._record_flow(state)
+        return state
+
+    # ══════════════════════════════════════════════════════════════
+    # Shortcuts — پاسخ مستقیم بدون پایپ‌لاین RAG
+    # ══════════════════════════════════════════════════════════════
+
+    _CHAT_SYSTEM = (
+        "You are a helpful, friendly assistant. Reply in the same language "
+        "as the user (Persian or English). Keep the answer short and natural. "
+        "Do not mention retrieval, context, or citations."
+    )
+
+    async def _try_shortcut(self, state: AgentState) -> bool:
+        """
+        کوئری‌های گفت‌وگویی یا محاسباتی ساده را بدون phi3/retrieve/refresh
+        جواب می‌دهد. True یعنی state.final_answer پر شد.
+        """
+        import time as _time
+        t0 = _time.perf_counter()
+
+        # «hello»، «مرسی»، «خوبی؟» و ... → پاسخ مستقیم مدل
+        if is_conversational(state.query):
+            try:
+                self._think(state, "shortcut",
+                            "کوئری گفت‌وگوی ساده است → پاسخ مستقیم بدون RAG")
+                state.final_answer = await self.direct_answer(state.query, state=state)
+                state.confidence = 1.0
+                state.strategy = "direct_chat"
+                state.current_step = FlowStep.ANSWER
+                state.timings["direct_chat"] = _time.perf_counter() - t0
+                self._trace(state, "shortcut", state.timings["direct_chat"],
+                            detail="direct_chat")
+                self._trace(state, "answer", 0.0)
+                return True
+            except Exception as e:
+                logger.warning("Direct chat shortcut failed, falling back to full flow: %s", e)
+                return False
+
+        # «28% of 8795576» یا «2+2*3» → مستقیم skill محاسبه، بدون planner
+        expr = extract_calc_expression(state.query)
+        if expr:
+            result = await self.skill_executor.execute_skill(
+                "calculate", {"expression": expr}
+            )
+            if result.success and isinstance(result.output, dict) and "result" in result.output:
+                state.final_answer = f"{expr} = {result.output['result']}"
+                state.confidence = 1.0
+                state.strategy = "direct_calculation"
+                state.current_step = FlowStep.ANSWER
+                state.tool_results = [{
+                    "tool": "calculate", "success": True,
+                    "output": result.output, "error": None,
+                    "execution_time": result.execution_time,
+                }]
+                state.timings["direct_calculation"] = _time.perf_counter() - t0
+                self._trace(state, "shortcut", state.timings["direct_calculation"],
+                            detail=f"calculate: {expr}")
+                self._trace(state, "answer", 0.0)
+                return True
+            logger.warning(
+                "Calculation shortcut failed for %r (%s) — falling back to full flow",
+                expr, result.error,
+            )
+
+        return False
+
+    async def direct_answer(
+        self,
+        question: str,
+        context: Optional[str] = None,
+        state: Optional[AgentState] = None,
+    ) -> str:
+        """
+        پاسخ مستقیم با مدل answer (granite) بدون retrieval — برای گفت‌وگوی
+        ساده و پرسش درباره فایل‌های آپلودشده (context = خروجی skill ها).
+        اگر مدل thinking token تولید کند، در state.thinking_log ثبت می‌شود.
+        """
+        import asyncio as _asyncio
+
+        if "llm_client_factory" not in self.config:
+            raise RuntimeError("llm_client_factory not configured")
+
+        async with self.config["llm_client_factory"]() as llm:
+            # generate سینک است (پشت execution_slot خود gate) → thread
+            resp = await _asyncio.to_thread(
+                llm.generate,
+                question,
+                system=self._CHAT_SYSTEM if context is None else None,
+                context=context,
+            )
+        if state is not None and getattr(resp, "reasoning", None):
+            self._think(state, "model_thinking", resp.reasoning)
+        return resp.text
+
     def _record_flow(self, state: AgentState) -> None:
-        """ثبت خلاصه اجرای یک query برای dashboard"""
+        """ثبت خلاصه اجرای یک query برای dashboard + ذخیره‌ی دائمی سشن"""
         try:
-            analysis = state.query_analysis
-            self.flow_history.append({
+            # مسیر shortcut اصلاً classification ندارد → query_analysis وجود ندارد
+            analysis = getattr(state, "query_analysis", None)
+            record = {
                 "timestamp": time.time(),
                 "query": state.query[:200],
                 "session_id": state.session_id,
@@ -268,9 +473,14 @@ class AdaptiveOrchestrator:
                 "timings": dict(state.timings),
                 "errors": list(state.errors),
                 "answered": bool(state.final_answer) and state.current_step == FlowStep.ANSWER,
-            })
+                "answer": (state.final_answer or "")[:1500],
+                "trace": [dict(e) for e in state.flow_trace],
+            }
+            self.flow_history.append(record)
             if len(self.flow_history) > 200:
                 self.flow_history.pop(0)
+            # ذخیره‌ی دائمی — بعد از restart هم در tab «Flow» قابل مرور است
+            self._session_store.append(record)
         except Exception as e:
             logger.debug("flow history record failed: %s", e)
     
@@ -292,9 +502,32 @@ class AdaptiveOrchestrator:
             f"complexity={query_analysis.complexity.value}, "
             f"strategy={query_analysis.suggested_strategy}"
         )
+        self._think(
+            state, "classify",
+            f"نوع کوئری: {query_analysis.query_type.value} | "
+            f"پیچیدگی: {query_analysis.complexity.value} | "
+            f"استراتژی: {query_analysis.suggested_strategy}",
+        )
         
         # 2. فهم پایه با Phi4 (اگر موجود باشد)
-        if "phi4_mini_factory" in self.config:
+        # برای کوئری‌های ساده classifier به‌تنهایی کافی است — اجرای phi4
+        # (~۴۵ ثانیه روی MLX) فقط entities/sub-question تکراری تولید می‌کرد.
+        # استثنا: اگر کوئری به فایل media اشاره دارد، phi4 لازم است تا
+        # tool مناسب (YOLO/Whisper/...) را انتخاب کند.
+        skip_phi4 = (
+            query_analysis.complexity == QueryComplexity.LOW
+            and query_analysis.query_type in {
+                QueryType.SIMPLE_FACT, QueryType.CREATIVE, QueryType.CALCULATION,
+            }
+            and not self._MEDIA_HINT.search(state.query)
+        )
+        if skip_phi4:
+            logger.info(
+                "Skipping phi4 understanding (type=%s, complexity=low) — "
+                "classifier plan is sufficient",
+                query_analysis.query_type.value,
+            )
+        if "phi4_mini_factory" in self.config and not skip_phi4:
             async with self.config["phi4_mini_factory"]() as phi4:
                 result = await phi4.understand_and_plan(
                     query=state.query,
@@ -307,6 +540,18 @@ class AdaptiveOrchestrator:
                 state.extracted_entities = result["entities"]
                 state.plan_steps = result["steps"]
                 state.strategy = result["strategy"]
+
+                plan_lines = [
+                    f"{s.get('id')}. {s.get('action')}: {s.get('description', '')[:80]}"
+                    for s in (result.get("steps") or [])
+                ]
+                self._think(
+                    state, "plan",
+                    f"intent: {result['intent']} | strategy: {result['strategy']}"
+                    + (f"\nزیرسوال‌ها: {result['sub_questions']}"
+                       if result.get("sub_questions") else "")
+                    + ("\nبرنامه:\n" + "\n".join(plan_lines) if plan_lines else ""),
+                )
         
         # 3. اجرای tool calls — only execute non-retrieval tools (calculate,
         #    summarize, etc.) since retrieval is handled by the dynamic plan
@@ -335,6 +580,8 @@ class AdaptiveOrchestrator:
                 required_steps=[], skip_steps=[], max_iterations=0
             )
             state.timings["understand"] = time.perf_counter() - t0
+            self._trace(state, "understand", state.timings["understand"],
+                        detail="tool call answered the query")
             state.current_step = FlowStep.ANSWER
             return
 
@@ -359,6 +606,11 @@ class AdaptiveOrchestrator:
         state.query_analysis = query_analysis
 
         state.timings["understand"] = time.perf_counter() - t0
+        self._trace(
+            state, "understand", state.timings["understand"],
+            detail=f"type={query_analysis.query_type.value}"
+                   f"{' (phi4 skipped)' if skip_phi4 else ''}",
+        )
 
         # Set initial step to the first required step in the dynamic plan
         if dynamic_plan.required_steps:
@@ -519,21 +771,16 @@ class AdaptiveOrchestrator:
             return self._get_next_required_step(step, plan)
         
         t0 = time.perf_counter()
-        
+
         try:
-            if step == FlowStep.RETRIEVE:
-                next_step = await self._step_retrieve(state, plan)
-            elif step == FlowStep.ASSESS:
-                next_step = await self._step_assess(state, plan)
-            elif step == FlowStep.REFRESH:
-                next_step = await self._step_refresh(state, plan)
-            elif step == FlowStep.REASON:
-                next_step = await self._step_reason(state, plan)
-            elif step == FlowStep.VALIDATE:
-                next_step = await self._step_validate(state, plan)
-            else:
+            # جدول گره‌ها (نگاشت node → handler) — معادل add_node در LangGraph
+            handler = self._STEP_HANDLERS.get(step)
+            if handler is None:
                 next_step = FlowStep.ERROR
-            
+            else:
+                next_step = await handler(self, state, plan)
+
+
         except Exception as e:
             logger.error(f"Step {step} failed: {e}", exc_info=True)
             state.errors.append(f"[{step}] {str(e)}")
@@ -543,7 +790,32 @@ class AdaptiveOrchestrator:
             self._release_gpu_cache()
 
         state.timings[step.value] = time.perf_counter() - t0
+        self._trace(
+            state, step.value, state.timings[step.value],
+            status="error" if next_step == FlowStep.ERROR else "done",
+            detail=self._step_detail(state, step),
+        )
         return next_step
+
+    @staticmethod
+    def _step_detail(state: AgentState, step: FlowStep) -> str:
+        """خلاصه‌ی یک‌خطی نتیجه‌ی step برای نمایش در گراف فلو"""
+        try:
+            if step == FlowStep.RETRIEVE and state.retrieval:
+                return (
+                    f"chunks={len(state.retrieval.vector_chunks)} "
+                    f"conf={state.retrieval.confidence:.2f}"
+                )
+            if step == FlowStep.ASSESS and state.retrieval:
+                return f"conf={state.retrieval.confidence:.2f}"
+            if step == FlowStep.REFRESH:
+                m = state.metadata.get("last_refresh_metrics") or {}
+                return f"items={m.get('total_items', 0)} chunks={m.get('chunks_ingested', 0)}"
+            if step in (FlowStep.REASON, FlowStep.VALIDATE):
+                return f"conf={state.confidence:.2f}"
+        except Exception:
+            pass
+        return ""
 
     @staticmethod
     def _release_gpu_cache() -> None:
@@ -873,39 +1145,90 @@ class AdaptiveOrchestrator:
             return FlowStep.REFRESH
         # نه refresh مجاز است نه پاسخ بهتری در دسترس — با همین پاسخ خارج شو
         return FlowStep.ANSWER
-    
+
+    # ══════════════════════════════════════════════════════════════
+    # جدول گره‌های گراف — معادل add_node در LangGraph
+    # (هر handler نام گره‌ی بعدی را برمی‌گرداند = conditional edge)
+    # ══════════════════════════════════════════════════════════════
+    _STEP_HANDLERS = {
+        FlowStep.RETRIEVE: _step_retrieve,
+        FlowStep.ASSESS:   _step_assess,
+        FlowStep.REFRESH:  _step_refresh,
+        FlowStep.REASON:   _step_reason,
+        FlowStep.VALIDATE: _step_validate,
+    }
+
+
     # ══════════════════════════════════════════════════════════════
     # Helpers
     # ══════════════════════════════════════════════════════════════
     
+    # اشاره به فایل media در متن کوئری → phi4 برای انتخاب tool لازم است
+    _MEDIA_HINT = re.compile(
+        r"\.(png|jpe?g|bmp|webp|gif|tiff|wav|mp3|m4a|flac|ogg|aac|pdf|docx?|xlsx?|csv)\b",
+        re.IGNORECASE,
+    )
+
+    # tool های media که خروجی‌شان مستقیم قابل ارائه به کاربر است
+    _MEDIA_TOOLS = {
+        "detect_objects_in_image", "estimate_pose_in_image",
+        "segment_image_objects", "transcribe_audio_file", "list_local_models",
+    }
+
     def _tool_results_answer_query(
         self, state: AgentState, analysis: QueryAnalysis
     ) -> bool:
-        """Check if tool results already answer the query (e.g. calculate)."""
+        """Check if tool results already answer the query (calculate / media tools)."""
         if not state.tool_results:
-            return False
-
-        if analysis.query_type not in (QueryType.CALCULATION,):
             return False
 
         successful = [tr for tr in state.tool_results if tr.get("success")]
         if not successful:
             return False
 
+        media_calls = any(tr.get("tool") in self._MEDIA_TOOLS for tr in successful)
+        if analysis.query_type not in (QueryType.CALCULATION,) and not media_calls:
+            return False
+
         parts = []
         for tr in successful:
             output = tr.get("output", {})
-            if isinstance(output, dict) and "result" in output:
+            if not isinstance(output, dict):
+                continue
+            if "result" in output:
                 expr = output.get("expression", "")
                 result = output["result"]
                 parts.append(f"{expr} = {result}" if expr else str(result))
-            elif isinstance(output, dict) and "summary" in output:
+            elif "summary" in output:
                 parts.append(output["summary"])
+            elif output.get("objects") is not None and output.get("success"):
+                objs = output["objects"]
+                names = ", ".join(
+                    f"{o.get('class_name', o.get('label', '?'))}"
+                    f" ({o.get('confidence', 0):.0%})" if isinstance(o, dict) else str(o)
+                    for o in objs[:15]
+                )
+                parts.append(
+                    f"اشیاء تشخیص‌داده‌شده ({output.get('count', len(objs))}): {names}"
+                    if objs else "شیء مشخصی در تصویر پیدا نشد."
+                )
+            elif output.get("text") and output.get("success"):
+                lang = output.get("language", "?")
+                parts.append(f"متن پیاده‌شده (زبان={lang}):\n{output['text']}")
+            elif output.get("persons") is not None and output.get("success"):
+                parts.append(f"تعداد افراد با ژست تشخیص‌داده‌شده: {output.get('count', 0)}")
+            elif output.get("models") is not None and output.get("success"):
+                lines = [
+                    f"- {m['name']} [{m['kind']}]: {', '.join(m['capabilities'])}"
+                    f"{'' if m['available'] else ' (روی دیسک موجود نیست)'}"
+                    for m in output["models"]
+                ]
+                parts.append("مدل‌های لوکال:\n" + "\n".join(lines))
 
         if parts:
-            state.final_answer = "\n".join(parts)
-            state.confidence = 1.0
-            logger.info(f"Tool results answered query directly: {state.final_answer}")
+            state.final_answer = "\n\n".join(parts)
+            state.confidence = 1.0 if not media_calls else 0.9
+            logger.info("Tool results answered query directly (%d parts)", len(parts))
             return True
 
         return False
