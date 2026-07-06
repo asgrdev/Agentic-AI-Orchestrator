@@ -18,6 +18,7 @@ MANIFEST
 *.spec
 *.manifest
 *.md
+
 # ── Build / dist ──────────────────────────────────────────────────────────────
 build/
 dist/
