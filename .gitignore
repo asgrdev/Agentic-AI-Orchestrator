@@ -17,7 +17,7 @@ MANIFEST
 *.egg
 *.spec
 *.manifest
-
+*.md
 # ── Build / dist ──────────────────────────────────────────────────────────────
 build/
 dist/
